@@ -1,0 +1,25 @@
+diff --git a/src/java/main/org/apache/zookeeper/ClientCnxn.java b/src/java/main/org/apache/zookeeper/ClientCnxn.java
+index 6b230d5..cac2d0d 100644
+--- a/src/java/main/org/apache/zookeeper/ClientCnxn.java
++++ b/src/java/main/org/apache/zookeeper/ClientCnxn.java
+@@ -1042,6 +1042,11 @@ public class ClientCnxn {
+                     }
+                     
+                     if (to <= 0) {
++                        LOG.warn("Client session timed out, have not heard from server in "
++				+ clientCnxnSocket.getIdleRecv()
++				+ "ms"
++				+ " for sessionid 0x"
++				+ Long.toHexString(sessionId));
+                         throw new SessionTimeoutException(
+                                 "Client session timed out, have not heard from server in "
+                                         + clientCnxnSocket.getIdleRecv() + "ms"
+@@ -1217,6 +1222,8 @@ public class ClientCnxn {
+                         Watcher.Event.EventType.None,
+                         Watcher.Event.KeeperState.Expired, null));
+                 eventThread.queueEventOfDeath();
++                LOG.warn("Unable to reconnect to ZooKeeper service, session 0x"
++			+ Long.toHexString(sessionId) + " has expired");
+                 throw new SessionExpiredException(
+                         "Unable to reconnect to ZooKeeper service, session 0x"
+                                 + Long.toHexString(sessionId) + " has expired");
