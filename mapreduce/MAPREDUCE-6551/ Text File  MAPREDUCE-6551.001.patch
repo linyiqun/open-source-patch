@@ -1,0 +1,159 @@
+diff --git hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapred/MapTaskAttemptImpl.java hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapred/MapTaskAttemptImpl.java
+index ab5e7f2..b5f6466 100644
+--- hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapred/MapTaskAttemptImpl.java
++++ hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapred/MapTaskAttemptImpl.java
+@@ -29,6 +29,7 @@
+ import org.apache.hadoop.mapreduce.v2.app.job.impl.TaskAttemptImpl;
+ import org.apache.hadoop.security.Credentials;
+ import org.apache.hadoop.security.token.Token;
++import org.apache.hadoop.yarn.api.records.Resource;
+ import org.apache.hadoop.yarn.event.EventHandler;
+ import org.apache.hadoop.yarn.util.Clock;
+ 
+@@ -47,7 +48,9 @@ public MapTaskAttemptImpl(TaskId taskId, int attempt,
+     super(taskId, attempt, eventHandler, 
+         taskAttemptListener, jobFile, partition, conf, splitInfo.getLocations(),
+         jobToken, credentials, clock, appContext);
++
+     this.splitInfo = splitInfo;
++    autoSetMemorySize();
+   }
+ 
+   @Override
+@@ -61,4 +64,35 @@ public Task createRemoteTask() {
+     return mapTask;
+   }
+ 
++  private void autoSetMemorySize() {
++    int memory;
++    int unitInputLength;
++    int unitMemorySize;
++    boolean isMemoryAutoSetEnabled;
++    Resource resourceCapacity;
++
++    isMemoryAutoSetEnabled =
++        Boolean.parseBoolean(conf.get(
++            MRJobConfig.MAP_MEMORY_MB_AUTOSET_ENABLED,
++            MRJobConfig.DEFAULT_MEMORY_MB_AUTOSET_ENABLED));
++    if (isMemoryAutoSetEnabled) {
++      unitInputLength =
++          conf.getInt(MRJobConfig.MAP_UNIT_INPUT_LENGTH,
++              MRJobConfig.DEFAULT_MAP_UNIT_INPUT_LENGTH);
++      unitMemorySize =
++          conf.getInt(MRJobConfig.MAP_MEMORY_MB,
++              MRJobConfig.DEFAULT_MAP_MEMORY_MB);
++
++      memory =
++          (int) (Math.ceil(1.0 * splitInfo.getInputDataLength()
++              / unitInputLength) * unitMemorySize);
++    } else {
++      memory =
++          conf.getInt(MRJobConfig.MAP_MEMORY_MB,
++              MRJobConfig.DEFAULT_MAP_MEMORY_MB);
++    }
++
++    resourceCapacity = getResourceCapability();
++    resourceCapacity.setMemory(memory);
++  }
+ }
+diff --git hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/v2/app/job/impl/TaskAttemptImpl.java hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/v2/app/job/impl/TaskAttemptImpl.java
+index a603a80..476d3c7 100644
+--- hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/v2/app/job/impl/TaskAttemptImpl.java
++++ hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/v2/app/job/impl/TaskAttemptImpl.java
+@@ -1966,4 +1966,8 @@ private void initTaskAttemptStatus(TaskAttemptStatus result) {
+     result.counters = counters;
+   }
+ 
++  @VisibleForTesting
++  public Resource getResourceCapability() {
++    return this.resourceCapability;
++  }
+ }
+diff --git hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/test/java/org/apache/hadoop/mapreduce/v2/app/job/impl/TestTaskAttempt.java hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/test/java/org/apache/hadoop/mapreduce/v2/app/job/impl/TestTaskAttempt.java
+index 1807c1c..1a6ef8c 100644
+--- hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/test/java/org/apache/hadoop/mapreduce/v2/app/job/impl/TestTaskAttempt.java
++++ hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/test/java/org/apache/hadoop/mapreduce/v2/app/job/impl/TestTaskAttempt.java
+@@ -41,6 +41,7 @@
+ import org.apache.hadoop.fs.RawLocalFileSystem;
+ import org.apache.hadoop.mapred.JobConf;
+ import org.apache.hadoop.mapred.MapTaskAttemptImpl;
++import org.apache.hadoop.mapred.SpillRecord;
+ import org.apache.hadoop.mapreduce.Counters;
+ import org.apache.hadoop.mapreduce.JobCounter;
+ import org.apache.hadoop.mapreduce.MRJobConfig;
+@@ -967,6 +968,58 @@ public void testContainerKillWhileCommitPending() throws Exception {
+         taImpl.getInternalState());
+   }
+ 
++  @Test
++  public void testMapTaskAttemptMemoryAutoSet() throws Exception {
++    int memorySize;
++    int adjustedMemorySize;
++    Resource resourceCapacity;
++
++    EventHandler eventHandler = mock(EventHandler.class);
++    String[] hosts = new String[3];
++    hosts[0] = "host1";
++    hosts[1] = "host2";
++    hosts[2] = "host3";
++    TaskSplitMetaInfo splitInfo =
++        new TaskSplitMetaInfo(hosts, 0, 2 * 1024 * 1024 * 1024l);
++
++    TaskAttemptImpl mockTaskAttempt =
++        createMapTaskAttemptImplForTest(eventHandler, splitInfo);
++
++    resourceCapacity = mockTaskAttempt.getResourceCapability();
++    memorySize = resourceCapacity.getMemory();
++
++    // Disable the auto-set memorySize function
++    // memorySize will be equal to default size
++    assertEquals(MRJobConfig.DEFAULT_MAP_MEMORY_MB, memorySize);
++
++    // Enable the auto-set memory function
++    Clock clock = new SystemClock();
++    ApplicationId appId = ApplicationId.newInstance(1, 1);
++    JobId jobId = MRBuilderUtils.newJobId(appId, 1);
++    TaskId taskId = MRBuilderUtils.newTaskId(jobId, 1, TaskType.MAP);
++    TaskAttemptListener taListener = mock(TaskAttemptListener.class);
++    Path jobFile = mock(Path.class);
++    JobConf jobConf = new JobConf();
++    jobConf.set(MRJobConfig.MAP_MEMORY_MB_AUTOSET_ENABLED, "true");
++    jobConf.set(MRJobConfig.MAP_MEMORY_MB,
++        String.valueOf(MRJobConfig.DEFAULT_MAP_MEMORY_MB));
++    jobConf.set(MRJobConfig.MAP_UNIT_INPUT_LENGTH,
++        String.valueOf(MRJobConfig.DEFAULT_MAP_UNIT_INPUT_LENGTH));
++
++    TaskAttemptImpl taImpl =
++        new MapTaskAttemptImpl(taskId, 1, eventHandler, jobFile, 1, splitInfo,
++            jobConf, taListener, null, null, clock, null);
++
++    resourceCapacity = taImpl.getResourceCapability();
++    memorySize = resourceCapacity.getMemory();
++    adjustedMemorySize =
++        (int) (Math.ceil(1.0 * splitInfo.getInputDataLength()
++            / MRJobConfig.DEFAULT_MAP_UNIT_INPUT_LENGTH) * MRJobConfig.DEFAULT_MAP_MEMORY_MB);
++
++    // Enable the auto-set function,the memorySize will be changed
++    assertEquals(adjustedMemorySize, memorySize);
++  }
++
+   public static class MockEventHandler implements EventHandler {
+     public boolean internalError;
+ 
+diff --git hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapreduce/MRJobConfig.java hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapreduce/MRJobConfig.java
+index fbe0a06..821521d 100644
+--- hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapreduce/MRJobConfig.java
++++ hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapreduce/MRJobConfig.java
+@@ -240,6 +240,12 @@
+   public static final String MAP_MEMORY_MB = "mapreduce.map.memory.mb";
+   public static final int DEFAULT_MAP_MEMORY_MB = 1024;
+ 
++  public static final String MAP_MEMORY_MB_AUTOSET_ENABLED = "map.memory-autoset.enabled";
++  public static final String DEFAULT_MEMORY_MB_AUTOSET_ENABLED = "false";
++
++  public static final String MAP_UNIT_INPUT_LENGTH = "map.unit-input.length";
++  public static final int DEFAULT_MAP_UNIT_INPUT_LENGTH = 1024 * 1024 * 1024;
++
+   public static final String MAP_CPU_VCORES = "mapreduce.map.cpu.vcores";
+   public static final int DEFAULT_MAP_CPU_VCORES = 1;
+ 
