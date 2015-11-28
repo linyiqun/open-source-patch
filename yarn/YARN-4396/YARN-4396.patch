@@ -1,0 +1,127 @@
+diff --git hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FSAppAttempt.java hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FSAppAttempt.java
+index 45d5bba..b0c6df4 100644
+--- hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FSAppAttempt.java
++++ hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FSAppAttempt.java
+@@ -249,15 +249,38 @@ public synchronized NodeType getAllowedLocalityLevel(Priority priority,
+       rackLocalityThreshold;
+ 
+     // Relax locality constraints once we've surpassed threshold.
+-    if (getSchedulingOpportunities(priority) > (numNodes * threshold)) {
++    int schedulingOpportunities = getSchedulingOpportunities(priority);
++    double thresholdNum = numNodes * threshold;
++    if (schedulingOpportunities > thresholdNum) {
+       if (allowed.equals(NodeType.NODE_LOCAL)) {
++        if (LOG.isDebugEnabled()) {
++          LOG.debug("SchedulingOpportunities: " + schedulingOpportunities
++              + ", nodeLocalityThreshold: " + thresholdNum
++              + ", change allowedLocality from NODE_LOCAL to RACK_LOCAL"
++              + ", priority: " + priority + ", app attempt id: "
++              + this.attemptId);
++        }
+         allowedLocalityLevel.put(priority, NodeType.RACK_LOCAL);
+         resetSchedulingOpportunities(priority);
+       }
+       else if (allowed.equals(NodeType.RACK_LOCAL)) {
++        if (LOG.isDebugEnabled()) {
++          LOG.debug("SchedulingOpportunities: " + schedulingOpportunities
++              + ", rackLocalityThreshold: " + thresholdNum
++              + ", change allowedLocality from RACK_LOCAL to OFF_SWITCH"
++              + ", priority: " + priority + ", app attempt id: "
++              + this.attemptId);
++        }
+         allowedLocalityLevel.put(priority, NodeType.OFF_SWITCH);
+         resetSchedulingOpportunities(priority);
+       }
++    } else {
++      if (LOG.isDebugEnabled()) {
++        LOG.debug("SchedulingOpportunities: " + schedulingOpportunities
++            + ", rackLocalityThreshold: " + thresholdNum
++            + ", allowedLocality not changed: " + allowed + ", priority: "
++            + priority + ", app attempt id: " + this.attemptId);
++      }
+     }
+     return allowedLocalityLevel.get(priority);
+   }
+@@ -302,12 +325,33 @@ public synchronized NodeType getAllowedLocalityLevelByTime(Priority priority,
+ 
+     if (waitTime > thresholdTime) {
+       if (allowed.equals(NodeType.NODE_LOCAL)) {
++        if (LOG.isDebugEnabled()) {
++          LOG.debug("Waiting time: " + waitTime
++              + " ms, nodeLocalityDelay time: " + nodeLocalityDelayMs + " ms"
++              + ", change allowedLocality from NODE_LOCAL to RACK_LOCAL"
++              + ", priority: " + priority + ", app attempt id: "
++              + this.attemptId);
++        }
+         allowedLocalityLevel.put(priority, NodeType.RACK_LOCAL);
+         resetSchedulingOpportunities(priority, currentTimeMs);
+       } else if (allowed.equals(NodeType.RACK_LOCAL)) {
++        if (LOG.isDebugEnabled()) {
++          LOG.debug("Waiting time: " + waitTime
++              + " ms, rackLocalityDelay time: " + rackLocalityDelayMs + " ms"
++              + ", change allowedLocality from RACK_LOCAL to OFF_SWITCH"
++              + ", priority: " + priority + ", app attempt id: "
++              + this.attemptId);
++        }
+         allowedLocalityLevel.put(priority, NodeType.OFF_SWITCH);
+         resetSchedulingOpportunities(priority, currentTimeMs);
+       }
++    } else {
++      if (LOG.isDebugEnabled()) {
++        LOG.debug("Waiting time: " + waitTime + " ms, thresholdTime time: "
++            + rackLocalityDelayMs + " ms" + ", allowedLocality not changed: "
++            + allowed + ", priority: " + priority + ", app attempt id: "
++            + this.attemptId);
++      }
+     }
+     return allowedLocalityLevel.get(priority);
+   }
+@@ -606,6 +650,12 @@ private Resource assignContainer(FSSchedulerNode node, boolean reserved) {
+ 
+         if (rackLocalRequest != null && rackLocalRequest.getNumContainers() != 0
+             && localRequest != null && localRequest.getNumContainers() != 0) {
++          if (LOG.isDebugEnabled()) {
++            LOG.debug("Assign container on " + node.getNodeName()
++                + " node, assignType: NODE_LOCAL" + ", allowedLocality: "
++                + allowedLocality + ", priority: " + priority
++                + ", app attempt id: " + this.attemptId);
++          }
+           return assignContainer(node, localRequest,
+               NodeType.NODE_LOCAL, reserved);
+         }
+@@ -617,6 +667,12 @@ private Resource assignContainer(FSSchedulerNode node, boolean reserved) {
+         if (rackLocalRequest != null && rackLocalRequest.getNumContainers() != 0
+             && (allowedLocality.equals(NodeType.RACK_LOCAL) ||
+             allowedLocality.equals(NodeType.OFF_SWITCH))) {
++          if (LOG.isDebugEnabled()) {
++            LOG.debug("Assign container on " + node.getNodeName()
++                + " node, assignType: RACK_LOCAL" + ", allowedLocality: "
++                + allowedLocality + ", priority: " + priority
++                + ", app attempt id: " + this.attemptId);
++          }
+           return assignContainer(node, rackLocalRequest,
+               NodeType.RACK_LOCAL, reserved);
+         }
+@@ -631,10 +687,22 @@ private Resource assignContainer(FSSchedulerNode node, boolean reserved) {
+             offSwitchRequest.getNumContainers() != 0) {
+           if (!hasNodeOrRackLocalRequests(priority) ||
+               allowedLocality.equals(NodeType.OFF_SWITCH)) {
++            if (LOG.isDebugEnabled()) {
++              LOG.debug("Assign container on " + node.getNodeName()
++                  + " node, assignType: OFF_SWITCH" + ", allowedLocality: "
++                  + allowedLocality + ", priority: " + priority
++                  + ", app attempt id: " + this.attemptId);
++            }
+             return assignContainer(
+                 node, offSwitchRequest, NodeType.OFF_SWITCH, reserved);
+           }
+         }
++
++        if (LOG.isDebugEnabled()) {
++          LOG.debug("Can't assign container on " + node.getNodeName()
++              + " node, allowedLocality: " + allowedLocality + ", priority: "
++              + priority + ", app attempt id: " + this.attemptId);
++        }
+       }
+     }
+     return Resources.none();
