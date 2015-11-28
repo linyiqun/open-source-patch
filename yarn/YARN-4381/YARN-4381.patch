@@ -1,0 +1,110 @@
+diff --git hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/ContainerImpl.java hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/ContainerImpl.java
+index f55e0e5..9a36b23 100644
+--- hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/ContainerImpl.java
++++ hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/ContainerImpl.java
+@@ -638,6 +638,7 @@ public ContainerState transition(ContainerImpl container,
+           LOG.warn("Failed to parse resource-request", e);
+           container.cleanup();
+           container.metrics.endInitingContainer();
++          container.metrics.localizeFailed();
+           return ContainerState.LOCALIZATION_FAILED;
+         }
+         Map<LocalResourceVisibility, Collection<LocalResourceRequest>> req =
+@@ -659,6 +660,7 @@ public ContainerState transition(ContainerImpl container,
+       } else {
+         container.sendLaunchEvent();
+         container.metrics.endInitingContainer();
++        container.metrics.doLaunchEvent();
+         return ContainerState.LOCALIZED;
+       }
+     }
+@@ -723,6 +725,7 @@ public ContainerState transition(ContainerImpl container,
+ 
+       container.sendLaunchEvent();
+       container.metrics.endInitingContainer();
++      container.metrics.doLaunchEvent();
+ 
+       // If this is a recovered container that has already launched, skip
+       // uploading resources to the shared cache. We do this to avoid uploading
+diff --git hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/metrics/NodeManagerMetrics.java hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/metrics/NodeManagerMetrics.java
+index 3615fee..dff4b9a 100644
+--- hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/metrics/NodeManagerMetrics.java
++++ hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/metrics/NodeManagerMetrics.java
+@@ -35,6 +35,8 @@
+   @Metric MutableCounterInt containersCompleted;
+   @Metric MutableCounterInt containersFailed;
+   @Metric MutableCounterInt containersKilled;
++  @Metric MutableCounterInt containerLocalizeFailed;
++  @Metric MutableCounterInt containersLaunchEventOperation;
+   @Metric("# of initializing containers")
+       MutableGaugeInt containersIniting;
+   @Metric MutableGaugeInt containersRunning;
+@@ -125,6 +127,14 @@ public void addContainerLaunchDuration(long value) {
+     containerLaunchDuration.add(value);
+   }
+ 
++  public void localizeFailed() {
++    containerLocalizeFailed.incr();
++  }
++
++  public void doLaunchEvent() {
++    containersLaunchEventOperation.incr();
++  }
++
+   public int getRunningContainers() {
+     return containersRunning.value();
+   }
+@@ -143,4 +153,14 @@ public int getFailedContainers() {
+   public int getCompletedContainers() {
+     return containersCompleted.value();
+   }
++
++  @VisibleForTesting
++  public int getLocalizeFailedContainers() {
++    return containerLocalizeFailed.value();
++  }
++
++  @VisibleForTesting
++  public int getLaunchEventContainers() {
++    return containersLaunchEventOperation.value();
++  }
+ }
+diff --git hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/TestContainer.java hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/TestContainer.java
+index 2834e30..1b1597d 100644
+--- hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/TestContainer.java
++++ hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/TestContainer.java
+@@ -587,7 +587,33 @@ public void testLaunchAfterKillRequest() throws Exception {
+       }
+     }
+   }
+-  
++
++  @Test
++  @SuppressWarnings("unchecked")
++  public void testLaunchEvent() throws Exception {
++    WrappedContainer wc = null;
++    try {
++      wc = new WrappedContainer(13, 314159265358979L, 4344, "yak");
++      wc.initContainer();
++      wc.localizeResources();
++      int running = metrics.getRunningContainers();
++      wc.launchContainer();
++      assertEquals(running + 1, metrics.getRunningContainers());
++      assertEquals(1, metrics.getLaunchEventContainers());
++      reset(wc.localizerBus);
++      wc.containerKilledOnRequest();
++      assertEquals(ContainerState.EXITED_WITH_FAILURE, wc.c.getContainerState());
++      assertNull(wc.c.getLocalizedResources());
++      verifyCleanupCall(wc);
++      wc.containerResourcesCleanup();
++      assertEquals(ContainerState.DONE, wc.c.getContainerState());
++    } finally {
++      if (wc != null) {
++        wc.finished();
++      }
++    }
++  }
++
+   private void verifyCleanupCall(WrappedContainer wc) throws Exception {
+     ResourcesReleasedMatcher matchesReq =
+         new ResourcesReleasedMatcher(wc.localResources, EnumSet.of(
