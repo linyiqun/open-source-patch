@@ -1,0 +1,351 @@
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/ClientDatanodeProtocol.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/ClientDatanodeProtocol.java
+index 1dcc196..10a6c2f 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/ClientDatanodeProtocol.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/ClientDatanodeProtocol.java
+@@ -165,4 +165,12 @@ HdfsBlocksMetadata getHdfsBlocksMetadata(String blockPoolId,
+    */
+   void triggerBlockReport(BlockReportOptions options)
+     throws IOException;
++
++  /**
++   * Set balance throttler bandwidth
++   *
++   * @param target bandwidth
++   * @throws IOException
++   */
++  void setBalanceThrottlerBandwidth(long bandwidth) throws IOException;
+ }
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocolPB/ClientDatanodeProtocolServerSideTranslatorPB.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocolPB/ClientDatanodeProtocolServerSideTranslatorPB.java
+index 5c2c4a7..ef3b518 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocolPB/ClientDatanodeProtocolServerSideTranslatorPB.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocolPB/ClientDatanodeProtocolServerSideTranslatorPB.java
+@@ -23,6 +23,7 @@
+ import java.util.Map;
+ 
+ import com.google.common.base.Optional;
++
+ import org.apache.hadoop.classification.InterfaceAudience;
+ import org.apache.hadoop.conf.ReconfigurationTaskStatus;
+ import org.apache.hadoop.conf.ReconfigurationUtil.PropertyChange;
+@@ -46,6 +47,8 @@
+ import org.apache.hadoop.hdfs.protocol.proto.ClientDatanodeProtocolProtos.GetReplicaVisibleLengthResponseProto;
+ import org.apache.hadoop.hdfs.protocol.proto.ClientDatanodeProtocolProtos.RefreshNamenodesRequestProto;
+ import org.apache.hadoop.hdfs.protocol.proto.ClientDatanodeProtocolProtos.RefreshNamenodesResponseProto;
++import org.apache.hadoop.hdfs.protocol.proto.ClientDatanodeProtocolProtos.SetBalanceThrottlerBandwidthRequestProto;
++import org.apache.hadoop.hdfs.protocol.proto.ClientDatanodeProtocolProtos.SetBalanceThrottlerBandwidthResponseProto;
+ import org.apache.hadoop.hdfs.protocol.proto.ClientDatanodeProtocolProtos.ShutdownDatanodeRequestProto;
+ import org.apache.hadoop.hdfs.protocol.proto.ClientDatanodeProtocolProtos.ShutdownDatanodeResponseProto;
+ import org.apache.hadoop.hdfs.protocol.proto.ClientDatanodeProtocolProtos.StartReconfigurationRequestProto;
+@@ -79,6 +82,8 @@
+       StartReconfigurationResponseProto.newBuilder().build();
+   private final static TriggerBlockReportResponseProto TRIGGER_BLOCK_REPORT_RESP =
+       TriggerBlockReportResponseProto.newBuilder().build();
++  private final static SetBalanceThrottlerBandwidthResponseProto SET_BALANCE_THROTTLER_BANDWIDTH_RESP =
++      SetBalanceThrottlerBandwidthResponseProto.newBuilder().build();
+   
+   private final ClientDatanodeProtocol impl;
+ 
+@@ -255,4 +260,16 @@ public TriggerBlockReportResponseProto triggerBlockReport(
+     }
+     return TRIGGER_BLOCK_REPORT_RESP;
+   }
++
++  @Override
++  public SetBalanceThrottlerBandwidthResponseProto setBalanceThrottlerBandwidth(
++      RpcController controller, SetBalanceThrottlerBandwidthRequestProto request)
++      throws ServiceException {
++    try {
++      impl.setBalanceThrottlerBandwidth(request.getBandwidth());
++    } catch (IOException e) {
++      throw new ServiceException(e);
++    }
++    return SET_BALANCE_THROTTLER_BANDWIDTH_RESP;
++  }
+ }
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocolPB/ClientDatanodeProtocolTranslatorPB.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocolPB/ClientDatanodeProtocolTranslatorPB.java
+index f1a1b24..173f67c 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocolPB/ClientDatanodeProtocolTranslatorPB.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocolPB/ClientDatanodeProtocolTranslatorPB.java
+@@ -28,6 +28,7 @@
+ 
+ import com.google.common.base.Optional;
+ import com.google.common.collect.Maps;
++
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+ import org.apache.hadoop.classification.InterfaceAudience;
+@@ -56,6 +57,7 @@
+ import org.apache.hadoop.hdfs.protocol.proto.ClientDatanodeProtocolProtos.GetReconfigurationStatusRequestProto;
+ import org.apache.hadoop.hdfs.protocol.proto.ClientDatanodeProtocolProtos.GetReconfigurationStatusResponseProto;
+ import org.apache.hadoop.hdfs.protocol.proto.ClientDatanodeProtocolProtos.GetReconfigurationStatusConfigChangeProto;
++import org.apache.hadoop.hdfs.protocol.proto.ClientDatanodeProtocolProtos.SetBalanceThrottlerBandwidthRequestProto;
+ import org.apache.hadoop.hdfs.protocol.proto.ClientDatanodeProtocolProtos.ShutdownDatanodeRequestProto;
+ import org.apache.hadoop.hdfs.protocol.proto.ClientDatanodeProtocolProtos.StartReconfigurationRequestProto;
+ import org.apache.hadoop.hdfs.protocol.proto.ClientDatanodeProtocolProtos.TriggerBlockReportRequestProto;
+@@ -349,4 +351,16 @@ public void triggerBlockReport(BlockReportOptions options)
+       throw ProtobufHelper.getRemoteException(e);
+     }
+   }
++
++  @Override
++  public void setBalanceThrottlerBandwidth(long bandwidth) throws IOException {
++    try {
++      rpcProxy.setBalanceThrottlerBandwidth(
++          NULL_CONTROLLER,
++          SetBalanceThrottlerBandwidthRequestProto.newBuilder()
++              .setBandwidth(bandwidth).build());
++    } catch (ServiceException e) {
++      throw ProtobufHelper.getRemoteException(e);
++    }
++  }
+ }
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java
+index 20cf0b4..f63bc38 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java
+@@ -3206,4 +3206,12 @@ public void removeSpanReceiver(long id) throws IOException {
+     checkSuperuserPrivilege();
+     spanReceiverHost.removeSpanReceiver(id);
+   }
++
++  @Override
++  public void setBalanceThrottlerBandwidth(long bandwidth) throws IOException {
++    DataXceiverServer dxcs =
++        (DataXceiverServer) this.dataXceiverServer.getRunnable();
++
++    dxcs.balanceThrottler.setBandwidth(bandwidth);
++  }
+ }
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/DFSAdmin.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/DFSAdmin.java
+index e80b4c0..eaf8ec5 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/DFSAdmin.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/DFSAdmin.java
+@@ -412,7 +412,8 @@ static int run(DistributedFileSystem dfs, String[] argv, int idx) throws IOExcep
+     "\t[-printTopology]\n" +
+     "\t[-refreshNamenodes datanode_host:ipc_port]\n"+
+     "\t[-deleteBlockPool datanode_host:ipc_port blockpoolId [force]]\n"+
+-    "\t[-setBalancerBandwidth <bandwidth in bytes per second>]\n" +
++    "\t[-setBalancerBandwidth <bandwidth in bytes per second> " +
++    "[datanode_host1:ipc_port,datanode_host2:ipc_port,...]]\n" +
+     "\t[-fetchImage <local directory>]\n" +
+     "\t[-allowSnapshot <snapshotDir>]\n" +
+     "\t[-disallowSnapshot <snapshotDir>]\n" +
+@@ -813,13 +814,29 @@ public int refreshNodes() throws IOException {
+   public int setBalancerBandwidth(String[] argv, int idx) throws IOException {
+     long bandwidth;
+     int exitCode = -1;
++    String[] datanodeHosts;
+ 
+     try {
+       bandwidth = Long.parseLong(argv[idx]);
+     } catch (NumberFormatException nfe) {
+       System.err.println("NumberFormatException: " + nfe.getMessage());
+       System.err.println("Usage: hdfs dfsadmin"
+-                  + " [-setBalancerBandwidth <bandwidth in bytes per second>]");
++          + " [-setBalancerBandwidth <bandwidth in bytes per second> "
++          + "[datanode_host1:ipc_port,datanode_host2:ipc_port,...]]");
++      return exitCode;
++    }
++
++    if(argv.length == 3){
++      idx++;
++      datanodeHosts = argv[idx].split(",");
++
++      if(datanodeHosts != null){
++        for(String dnHost: datanodeHosts){
++          setBalancerBandwidth(dnHost, bandwidth);
++        }
++      }
++
++      exitCode = 0;
+       return exitCode;
+     }
+ 
+@@ -976,13 +993,19 @@ private void printHelp(String cmd) {
+                              "\t\t   Refer to refreshNamenodes to shutdown a block pool\n" +
+                              "\t\t service on a datanode.\n";
+ 
+-    String setBalancerBandwidth = "-setBalancerBandwidth <bandwidth>:\n" +
+-      "\tChanges the network bandwidth used by each datanode during\n" +
+-      "\tHDFS block balancing.\n\n" +
+-      "\t\t<bandwidth> is the maximum number of bytes per second\n" +
+-      "\t\tthat will be used by each datanode. This value overrides\n" +
+-      "\t\tthe dfs.balance.bandwidthPerSec parameter.\n\n" +
+-      "\t\t--- NOTE: The new value is not persistent on the DataNode.---\n";
++    String setBalancerBandwidth =
++        "-setBalancerBandwidth: <bandwidth in bytes per second> "
++            + "[datanode_host1:ipc_port,datanode_host2:ipc_port,...]\n"
++            + "\t\tChanges the network bandwidth used by each datanode during\n"
++            + "\t\tHDFS block balancing.\n"
++            + "\t\t<bandwidth> is the maximum number of bytes per second\n"
++            + "\t\tif [datanode_host1:ipc_port,...] param is not specified that will be used "
++            + "by each datanode in cluster\n"
++            + "\t\tif [datanode_host1:ipc_port,...] has one or more values that will be used "
++            + "by these specific datanodes.\n"
++            + "\t\tThis value overrides\n"
++            + "\t\tthe dfs.balance.bandwidthPerSec parameter.\n\n"
++            + "\t\t--- NOTE: The new value is not persistent on the DataNode.---\n";
+     
+     String fetchImage = "-fetchImage <local directory>:\n" +
+       "\tDownloads the most recent fsimage from the Name Node and saves it in" +
+@@ -1606,7 +1629,8 @@ private static void printUsage(String cmd) {
+           + " [-deleteBlockPool datanode-host:port blockpoolId [force]]");
+     } else if ("-setBalancerBandwidth".equals(cmd)) {
+       System.err.println("Usage: hdfs dfsadmin"
+-                  + " [-setBalancerBandwidth <bandwidth in bytes per second>]");
++          + " [-setBalancerBandwidth <bandwidth in bytes per second> "
++          + "[datanode_host1:ipc_port,datanode_host2:ipc_port,...]]");
+     } else if ("-fetchImage".equals(cmd)) {
+       System.err.println("Usage: hdfs dfsadmin"
+           + " [-fetchImage <local directory>]");
+@@ -1738,7 +1762,7 @@ public int run(String[] argv) throws Exception {
+         return exitCode;
+       }
+     } else if ("-setBalancerBandwidth".equals(cmd)) {
+-      if (argv.length != 2) {
++      if ((argv.length != 2) && (argv.length != 3)) {
+         printUsage(cmd);
+         return exitCode;
+       }
+@@ -1950,6 +1974,23 @@ private int getDatanodeInfo(String[] argv, int i) throws IOException {
+     return 0;
+   }
+ 
++  private int setBalancerBandwidth(String hostName,
++      long bandwidth) throws IOException {
++    ClientDatanodeProtocol dnProxy;
++
++    try {
++      dnProxy = getDataNodeProxy(hostName);
++      dnProxy.setBalanceThrottlerBandwidth(bandwidth);
++
++      System.out.println("Set bandwidth " + bandwidth + " bytes for node " + hostName);
++    } catch (IOException ioe) {
++      System.err.println("Datanode " + hostName +" unreachable.");
++      return -1;
++    }
++
++    return 0;
++  }
++
+   /**
+    * main() has some simple utility methods.
+    * @param argv Command line parameters.
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/proto/ClientDatanodeProtocol.proto hadoop-hdfs-project/hadoop-hdfs/src/main/proto/ClientDatanodeProtocol.proto
+index 48f6dd1..84f61b0 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/proto/ClientDatanodeProtocol.proto
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/proto/ClientDatanodeProtocol.proto
+@@ -180,6 +180,13 @@ message GetReconfigurationStatusResponseProto {
+   repeated GetReconfigurationStatusConfigChangeProto changes = 3;
+ }
+ 
++message SetBalanceThrottlerBandwidthRequestProto {
++  required int64 bandwidth = 1;
++}
++
++message SetBalanceThrottlerBandwidthResponseProto {
++}
++
+ /**
+  * Protocol used from client to the Datanode.
+  * See the request and response for details of rpc call.
+@@ -232,4 +239,7 @@ service ClientDatanodeProtocolService {
+ 
+   rpc triggerBlockReport(TriggerBlockReportRequestProto)
+       returns(TriggerBlockReportResponseProto);
++
++  rpc setBalanceThrottlerBandwidth(SetBalanceThrottlerBandwidthRequestProto)
++      returns(SetBalanceThrottlerBandwidthResponseProto);
+ }
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/site/markdown/HDFSCommands.md hadoop-hdfs-project/hadoop-hdfs/src/site/markdown/HDFSCommands.md
+index a2622af..9d98cdc 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/site/markdown/HDFSCommands.md
++++ hadoop-hdfs-project/hadoop-hdfs/src/site/markdown/HDFSCommands.md
+@@ -322,7 +322,7 @@ Usage:
+               [-printTopology]
+               [-refreshNamenodes datanodehost:port]
+               [-deleteBlockPool datanode-host:port blockpoolId [force]]
+-              [-setBalancerBandwidth <bandwidth in bytes per second>]
++              [-setBalancerBandwidth <bandwidth in bytes per second> [datanode_host1:ipc_port,datanode_host2:ipc_port,...]]
+               [-allowSnapshot <snapshotDir>]
+               [-disallowSnapshot <snapshotDir>]
+               [-fetchImage <local directory>]
+@@ -357,7 +357,7 @@ Usage:
+ | `-printTopology` | Print a tree of the racks and their nodes as reported by the Namenode |
+ | `-refreshNamenodes` datanodehost:port | For the given datanode, reloads the configuration files, stops serving the removed block-pools and starts serving new block-pools. |
+ | `-deleteBlockPool` datanode-host:port blockpoolId [force] | If force is passed, block pool directory for the given blockpool id on the given datanode is deleted along with its contents, otherwise the directory is deleted only if it is empty. The command will fail if datanode is still serving the block pool. Refer to refreshNamenodes to shutdown a block pool service on a datanode. |
+-| `-setBalancerBandwidth` \<bandwidth in bytes per second\> | Changes the network bandwidth used by each datanode during HDFS block balancing. \<bandwidth\> is the maximum number of bytes per second that will be used by each datanode. This value overrides the dfs.balance.bandwidthPerSec parameter. NOTE: The new value is not persistent on the DataNode. |
++| `-setBalancerBandwidth` \<bandwidth in bytes per second\> | Changes the network bandwidth used by each datanode during HDFS block balancing. \<bandwidth\> is the maximum number of bytes per second that will be used by each datanode. If [datanode_host1:ipc_port,...] param is not specified that will be used by each datanode in cluster. If [datanode_host1:ipc_port,...] has one or more values that will be used by these specific datanodes. This value overrides the dfs.balance.bandwidthPerSec parameter. NOTE: The new value is not persistent on the DataNode. |
+ | `-allowSnapshot` \<snapshotDir\> | Allowing snapshots of a directory to be created. If the operation completes successfully, the directory becomes snapshottable. See the [HDFS Snapshot Documentation](./HdfsSnapshots.html) for more information. |
+ | `-disallowSnapshot` \<snapshotDir\> | Disallowing snapshots of a directory to be created. All snapshots of the directory must be deleted before disallowing snapshots. See the [HDFS Snapshot Documentation](./HdfsSnapshots.html) for more information. |
+ | `-fetchImage` \<local directory\> | Downloads the most recent fsimage from the NameNode and saves it in the specified local directory. |
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestBalancerBandwidth.java hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestBalancerBandwidth.java
+index 29869b1..247953e 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestBalancerBandwidth.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestBalancerBandwidth.java
+@@ -25,6 +25,7 @@
+ import org.apache.commons.logging.LogFactory;
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.hdfs.server.datanode.DataNode;
++import org.apache.hadoop.hdfs.tools.DFSAdmin;
+ import org.junit.Test;
+ 
+ /**
+@@ -81,12 +82,57 @@ public void testBalancerBandwidth() throws Exception {
+ 
+       assertEquals(newBandwidth, (long) datanodes.get(0).getBalancerBandwidth());
+       assertEquals(newBandwidth, (long) datanodes.get(1).getBalancerBandwidth());
++
++      // Set specific datanode's bandwidth
++      long specificBandwidth = 10 * DEFAULT_BANDWIDTH; // 10M bps
++      datanodes.get(0).setBalanceThrottlerBandwidth(specificBandwidth);
++
++      assertEquals(specificBandwidth, (long) datanodes.get(0)
++          .getBalancerBandwidth());
++      assertEquals(newBandwidth, (long) datanodes.get(1).getBalancerBandwidth());
+     }finally {
+       cluster.shutdown();
+     }
+   }
+ 
++  @Test
++  public void testDfsAdminSetBalancerBandwidth() throws Exception {
++    /* Set bandwidthPerSec to a low value of 1M bps. */
++    conf.setLong(DFSConfigKeys.DFS_DATANODE_BALANCE_BANDWIDTHPERSEC_KEY,
++        DEFAULT_BANDWIDTH);
++
++    /* Create and start cluster */
++    MiniDFSCluster cluster =
++        new MiniDFSCluster.Builder(conf).numDataNodes(NUM_OF_DATANODES).build();
++    DFSAdmin admin = new DFSAdmin(conf);
++
++    try {
++      cluster.waitActive();
++      ArrayList<DataNode> datanodes = cluster.getDataNodes();
++
++      // Ensure value from the configuration is reflected in the datanodes.
++      assertEquals(DEFAULT_BANDWIDTH, (long) datanodes.get(0).getBalancerBandwidth());
++      assertEquals(DEFAULT_BANDWIDTH, (long) datanodes.get(1).getBalancerBandwidth());
++
++      String dn1Address =
++          datanodes.get(0).getDatanodeId().getIpAddr() + ":"
++              + datanodes.get(0).getIpcPort();
++      // new datanode's bandwidth
++      long newBandwidth = 12 * DEFAULT_BANDWIDTH; // 12M bps
++      String[] args =
++          { "-setBalancerBandwidth", String.valueOf(newBandwidth), dn1Address };
++      assertEquals(0, admin.run(args));
++
++      assertEquals(newBandwidth, (long) datanodes.get(0).getBalancerBandwidth());
++      assertEquals(DEFAULT_BANDWIDTH, (long) datanodes.get(1)
++          .getBalancerBandwidth());
++    } finally {
++      cluster.shutdown();
++    }
++  }
++
+   public static void main(String[] args) throws Exception {
+     new TestBalancerBandwidth().testBalancerBandwidth();
++    new TestBalancerBandwidth().testDfsAdminSetBalancerBandwidth();
+   }
+ }
