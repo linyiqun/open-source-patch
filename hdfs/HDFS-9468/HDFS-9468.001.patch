@@ -1,0 +1,365 @@
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/ClientDatanodeProtocol.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/ClientDatanodeProtocol.java
+index 1dcc196..a20f0db 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/ClientDatanodeProtocol.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/ClientDatanodeProtocol.java
+@@ -165,4 +165,12 @@ HdfsBlocksMetadata getHdfsBlocksMetadata(String blockPoolId,
+    */
+   void triggerBlockReport(BlockReportOptions options)
+     throws IOException;
++
++  /**
++   * Set max concurrent xceivers per node.
++   *
++   * @param xceiverCount xceivercount value
++   * @throws IOException
++   */
++  void setDataXceiverCount(int xceiverCount) throws IOException;
+ }
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocolPB/ClientDatanodeProtocolServerSideTranslatorPB.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocolPB/ClientDatanodeProtocolServerSideTranslatorPB.java
+index 5c2c4a7..69ea96d 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocolPB/ClientDatanodeProtocolServerSideTranslatorPB.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocolPB/ClientDatanodeProtocolServerSideTranslatorPB.java
+@@ -23,6 +23,7 @@
+ import java.util.Map;
+ 
+ import com.google.common.base.Optional;
++
+ import org.apache.hadoop.classification.InterfaceAudience;
+ import org.apache.hadoop.conf.ReconfigurationTaskStatus;
+ import org.apache.hadoop.conf.ReconfigurationUtil.PropertyChange;
+@@ -46,6 +47,8 @@
+ import org.apache.hadoop.hdfs.protocol.proto.ClientDatanodeProtocolProtos.GetReplicaVisibleLengthResponseProto;
+ import org.apache.hadoop.hdfs.protocol.proto.ClientDatanodeProtocolProtos.RefreshNamenodesRequestProto;
+ import org.apache.hadoop.hdfs.protocol.proto.ClientDatanodeProtocolProtos.RefreshNamenodesResponseProto;
++import org.apache.hadoop.hdfs.protocol.proto.ClientDatanodeProtocolProtos.SetDataXceiverCountRequestProto;
++import org.apache.hadoop.hdfs.protocol.proto.ClientDatanodeProtocolProtos.SetDataXceiverCountResponseProto;
+ import org.apache.hadoop.hdfs.protocol.proto.ClientDatanodeProtocolProtos.ShutdownDatanodeRequestProto;
+ import org.apache.hadoop.hdfs.protocol.proto.ClientDatanodeProtocolProtos.ShutdownDatanodeResponseProto;
+ import org.apache.hadoop.hdfs.protocol.proto.ClientDatanodeProtocolProtos.StartReconfigurationRequestProto;
+@@ -79,6 +82,8 @@
+       StartReconfigurationResponseProto.newBuilder().build();
+   private final static TriggerBlockReportResponseProto TRIGGER_BLOCK_REPORT_RESP =
+       TriggerBlockReportResponseProto.newBuilder().build();
++  private final static SetDataXceiverCountResponseProto SET_DATA_XCEIVER_COUNT_RESP =
++      SetDataXceiverCountResponseProto.newBuilder().build();
+   
+   private final ClientDatanodeProtocol impl;
+ 
+@@ -255,4 +260,16 @@ public TriggerBlockReportResponseProto triggerBlockReport(
+     }
+     return TRIGGER_BLOCK_REPORT_RESP;
+   }
++
++  @Override
++  public SetDataXceiverCountResponseProto setDataXceiverCount(
++      RpcController controller, SetDataXceiverCountRequestProto request)
++      throws ServiceException {
++    try {
++      impl.setDataXceiverCount(request.getXceiverCount());
++    } catch (IOException e) {
++      throw new ServiceException(e);
++    }
++    return SET_DATA_XCEIVER_COUNT_RESP;
++  }
+ }
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocolPB/ClientDatanodeProtocolTranslatorPB.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocolPB/ClientDatanodeProtocolTranslatorPB.java
+index f1a1b24..3ef0700 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocolPB/ClientDatanodeProtocolTranslatorPB.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocolPB/ClientDatanodeProtocolTranslatorPB.java
+@@ -28,6 +28,7 @@
+ 
+ import com.google.common.base.Optional;
+ import com.google.common.collect.Maps;
++
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+ import org.apache.hadoop.classification.InterfaceAudience;
+@@ -56,6 +57,7 @@
+ import org.apache.hadoop.hdfs.protocol.proto.ClientDatanodeProtocolProtos.GetReconfigurationStatusRequestProto;
+ import org.apache.hadoop.hdfs.protocol.proto.ClientDatanodeProtocolProtos.GetReconfigurationStatusResponseProto;
+ import org.apache.hadoop.hdfs.protocol.proto.ClientDatanodeProtocolProtos.GetReconfigurationStatusConfigChangeProto;
++import org.apache.hadoop.hdfs.protocol.proto.ClientDatanodeProtocolProtos.SetDataXceiverCountRequestProto;
+ import org.apache.hadoop.hdfs.protocol.proto.ClientDatanodeProtocolProtos.ShutdownDatanodeRequestProto;
+ import org.apache.hadoop.hdfs.protocol.proto.ClientDatanodeProtocolProtos.StartReconfigurationRequestProto;
+ import org.apache.hadoop.hdfs.protocol.proto.ClientDatanodeProtocolProtos.TriggerBlockReportRequestProto;
+@@ -349,4 +351,16 @@ public void triggerBlockReport(BlockReportOptions options)
+       throw ProtobufHelper.getRemoteException(e);
+     }
+   }
++
++  @Override
++  public void setDataXceiverCount(int xceiverCount) throws IOException {
++    try {
++      rpcProxy.setDataXceiverCount(
++          NULL_CONTROLLER,
++          SetDataXceiverCountRequestProto.newBuilder()
++              .setXceiverCount(xceiverCount).build());
++    } catch (ServiceException e) {
++      throw ProtobufHelper.getRemoteException(e);
++    }
++  }
+ }
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java
+index 20cf0b4..096c35e 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java
+@@ -3206,4 +3206,18 @@ public void removeSpanReceiver(long id) throws IOException {
+     checkSuperuserPrivilege();
+     spanReceiverHost.removeSpanReceiver(id);
+   }
++
++  @Override
++  public void setDataXceiverCount(int xceiverCount) throws IOException {
++    DataXceiverServer dxcs =
++        (DataXceiverServer) this.dataXceiverServer.getRunnable();
++    dxcs.maxXceiverCount = xceiverCount;
++  }
++
++  @VisibleForTesting
++  public int getDataXceiverCount() {
++    DataXceiverServer dxcs =
++        (DataXceiverServer) this.dataXceiverServer.getRunnable();
++    return dxcs.maxXceiverCount;
++  }
+ }
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/DFSAdmin.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/DFSAdmin.java
+index e80b4c0..2ecfd10 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/DFSAdmin.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/DFSAdmin.java
+@@ -420,6 +420,8 @@ static int run(DistributedFileSystem dfs, String[] argv, int idx) throws IOExcep
+     "\t[-getDatanodeInfo <datanode_host:ipc_port>]\n" +
+     "\t[-metasave filename]\n" +
+     "\t[-triggerBlockReport [-incremental] <datanode_host:ipc_port>]\n" +
++    "\t[-setDataXceiverCount <xceiverCount> " +
++    "[datanode_host1:ipc_port,datanode_host2:ipc_port,...]]\n" +
+     "\t[-help [cmd]]\n";
+ 
+   /**
+@@ -1012,6 +1014,15 @@ private void printHelp(String cmd) {
+         + "\tIf 'incremental' is specified, it will be an incremental\n"
+         + "\tblock report; otherwise, it will be a full block report.\n";
+ 
++    String setDataXceiverCount =
++        "-setDataXceiverCount: <xceiverCount> "
++            + "[datanode_host1:ipc_port,datanode_host2:ipc_port,...]\n"
++            + "\t\tChanges the xceiver count for each datanode.\n"
++            + "\t\tif [datanode_host1:ipc_port,...] has one or more values that will be used "
++            + "by these specific datanodes.\n"
++            + "\t\tThis value overrides\n"
++            + "\t\tthe dfs.datanode.max.transfer.threads parameter.\n\n";
++
+     String help = "-help [cmd]: \tDisplays help for the given command or all commands if none\n" +
+       "\t\tis specified.\n";
+ 
+@@ -1104,6 +1115,7 @@ private void printHelp(String cmd) {
+       System.out.println(shutdownDatanode);
+       System.out.println(getDatanodeInfo);
+       System.out.println(triggerBlockReport);
++      System.out.println(setDataXceiverCount);
+       System.out.println(help);
+       System.out.println();
+       ToolRunner.printGenericCommandUsage(System.out);
+@@ -1619,6 +1631,10 @@ private static void printUsage(String cmd) {
+     } else if ("-triggerBlockReport".equals(cmd)) {
+       System.err.println("Usage: hdfs dfsadmin"
+           + " [-triggerBlockReport [-incremental] <datanode_host:ipc_port>]");
++    }  else if ("-setDataXceiverCount".equals(cmd)) {
++      System.err.println("Usage: hdfs dfsadmin"
++          + " [-setDataXceiverCount <xceiverCount> "
++          + "[datanode_host1:ipc_port,datanode_host2:ipc_port,...]]");
+     } else {
+       System.err.println("Usage: hdfs dfsadmin");
+       System.err.println("Note: Administrative commands can only be run as the HDFS superuser.");
+@@ -1626,7 +1642,6 @@ private static void printUsage(String cmd) {
+       ToolRunner.printGenericCommandUsage(System.err);
+     }
+   }
+-
+   /**
+    * @param argv The parameters passed to this program.
+    * @exception Exception if the filesystem does not exist.
+@@ -1762,6 +1777,11 @@ public int run(String[] argv) throws Exception {
+         printUsage(cmd);
+         return exitCode;
+       }
++    } else if ("-setDataXceiverCount".equals(cmd)) {
++      if (argv.length != 3) {
++        printUsage(cmd);
++        return exitCode;
++      }
+     }
+     
+     // initialize DFSAdmin
+@@ -1837,6 +1857,8 @@ public int run(String[] argv) throws Exception {
+         exitCode = reconfig(argv, i);
+       } else if ("-triggerBlockReport".equals(cmd)) {
+         exitCode = triggerBlockReport(argv);
++      } else if ("-setDataXceiverCount".equals(cmd)) {
++        exitCode = setDataXceiverCount(argv, i);
+       } else if ("-help".equals(cmd)) {
+         if (i < argv.length) {
+           printHelp(argv[i]);
+@@ -1950,6 +1972,45 @@ private int getDatanodeInfo(String[] argv, int i) throws IOException {
+     return 0;
+   }
+ 
++  private int setDataXceiverCount(String[] argv, int i){
++    int xceiverCount;
++    int exitCode;
++    String[] datanodeHosts;
++    ClientDatanodeProtocol dnProxy;
++
++    exitCode = -1;
++    try {
++      xceiverCount = Integer.parseInt(argv[i]);
++    } catch (NumberFormatException nfe) {
++      System.err.println("NumberFormatException: " + nfe.getMessage());
++      System.err.println("Usage: hdfs dfsadmin"
++          + "\t[-setDataXceiverCount <xceiverCount> "
++          + "[datanode_host1:ipc_port,datanode_host2:ipc_port,...]]\n");
++      return exitCode;
++    }
++
++    i++;
++    datanodeHosts = argv[i].split(",");
++
++    if (datanodeHosts != null) {
++      for (String dnHost : datanodeHosts) {
++        try {
++          dnProxy = getDataNodeProxy(dnHost);
++          dnProxy.setDataXceiverCount(xceiverCount);
++
++          System.out.println("Set dataXceiverCount value " + xceiverCount
++              + " for node " + dnHost);
++        } catch (IOException ioe) {
++          System.err.println("Datanode " + dnHost + " unreachable.");
++          return -1;
++        }
++      }
++    }
++
++    exitCode = 0;
++    return exitCode;
++  }
++
+   /**
+    * main() has some simple utility methods.
+    * @param argv Command line parameters.
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/proto/ClientDatanodeProtocol.proto hadoop-hdfs-project/hadoop-hdfs/src/main/proto/ClientDatanodeProtocol.proto
+index 48f6dd1..27a6ca8 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/proto/ClientDatanodeProtocol.proto
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/proto/ClientDatanodeProtocol.proto
+@@ -163,6 +163,13 @@ message TriggerBlockReportRequestProto {
+ message TriggerBlockReportResponseProto {
+ }
+ 
++message SetDataXceiverCountRequestProto {
++  required uint32 xceiverCount = 1;
++}
++
++message SetDataXceiverCountResponseProto {
++}
++
+ /** Query the running status of reconfiguration process */
+ message GetReconfigurationStatusRequestProto {
+ }
+@@ -232,4 +239,7 @@ service ClientDatanodeProtocolService {
+ 
+   rpc triggerBlockReport(TriggerBlockReportRequestProto)
+       returns(TriggerBlockReportResponseProto);
++
++  rpc setDataXceiverCount(SetDataXceiverCountRequestProto)
++      returns(SetDataXceiverCountResponseProto);
+ }
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/site/markdown/HDFSCommands.md hadoop-hdfs-project/hadoop-hdfs/src/site/markdown/HDFSCommands.md
+index a2622af..628c6c5 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/site/markdown/HDFSCommands.md
++++ hadoop-hdfs-project/hadoop-hdfs/src/site/markdown/HDFSCommands.md
+@@ -329,6 +329,7 @@ Usage:
+               [-shutdownDatanode <datanode_host:ipc_port> [upgrade]]
+               [-getDatanodeInfo <datanode_host:ipc_port>]
+               [-triggerBlockReport [-incremental] <datanode_host:ipc_port>]
++              [-setDataXceiverCount: <xceiverCount> [datanode_host1:ipc_port,datanode_host2:ipc_port,...]]
+               [-help [cmd]]
+ 
+ | COMMAND\_OPTION | Description |
+@@ -364,6 +365,7 @@ Usage:
+ | `-shutdownDatanode` \<datanode\_host:ipc\_port\> [upgrade] | Submit a shutdown request for the given datanode. See [Rolling Upgrade document](./HdfsRollingUpgrade.html#dfsadmin_-shutdownDatanode) for the detail. |
+ | `-getDatanodeInfo` \<datanode\_host:ipc\_port\> | Get the information about the given datanode. See [Rolling Upgrade document](./HdfsRollingUpgrade.html#dfsadmin_-getDatanodeInfo) for the detail. |
+ | `-triggerBlockReport` `[-incremental]` \<datanode\_host:ipc\_port\> | Trigger a block report for the given datanode. If 'incremental' is specified, it will be otherwise, it will be a full block report. |
++| `-setDataXceiverCount` \<xceiverCount\> | Changes the xceiver count for each datanode. \<bandwidth\> is the xceiverCount number that will be used by each datanode. If [datanode_host1:ipc_port,...] has one or more values that will be used by these specific datanodes. This value overrides the dfs.datanode.max.transfer.threads parameter parameter. |
+ | `-help` [cmd] | Displays help for the given command or all commands if none is specified. |
+ 
+ Runs a HDFS dfsadmin client.
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/tools/TestDFSAdmin.java hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/tools/TestDFSAdmin.java
+index 9758955..90bbbc6 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/tools/TestDFSAdmin.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/tools/TestDFSAdmin.java
+@@ -20,8 +20,10 @@
+ import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATANODE_DATA_DIR_KEY;
+ 
+ import com.google.common.collect.Lists;
++
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.conf.ReconfigurationUtil;
++import org.apache.hadoop.hdfs.DFSConfigKeys;
+ import org.apache.hadoop.hdfs.MiniDFSCluster;
+ import org.apache.hadoop.hdfs.server.common.Storage;
+ import org.apache.hadoop.hdfs.server.datanode.DataNode;
+@@ -42,6 +44,7 @@
+ import static org.hamcrest.CoreMatchers.anyOf;
+ import static org.hamcrest.CoreMatchers.is;
+ import static org.hamcrest.CoreMatchers.not;
++import static org.junit.Assert.assertEquals;
+ import static org.junit.Assert.assertThat;
+ import static org.junit.Assert.assertTrue;
+ import static org.hamcrest.CoreMatchers.containsString;
+@@ -148,4 +151,47 @@ public void testGetReconfigureStatus()
+     assertThat(outputs.get(failedOffset + 2),
+         containsString("To: \"new123\""));
+   }
++
++  @Test(timeout = 30000)
++  public void testSetDataXceiverCount() throws Exception {
++    int DEFAULT_DATA_XCEIVER_COUNT = 4096;
++    int NUM_OF_DATANODES = 2;
++
++    Configuration conf = new Configuration();
++    /* Set xceiverCount to a low default value . */
++    conf.setLong(DFSConfigKeys.DFS_DATANODE_MAX_RECEIVER_THREADS_KEY,
++        DEFAULT_DATA_XCEIVER_COUNT);
++
++    /* Create and start cluster */
++    cluster =
++        new MiniDFSCluster.Builder(conf).numDataNodes(NUM_OF_DATANODES).build();
++    DFSAdmin admin = new DFSAdmin(conf);
++
++    try {
++      cluster.waitActive();
++      ArrayList<DataNode> datanodes = cluster.getDataNodes();
++
++      // Ensure value from the configuration is reflected in the datanodes.
++      assertEquals(DEFAULT_DATA_XCEIVER_COUNT, (long) datanodes.get(0)
++          .getDataXceiverCount());
++      assertEquals(DEFAULT_DATA_XCEIVER_COUNT, (long) datanodes.get(1)
++          .getDataXceiverCount());
++
++      String dn1Address =
++          datanodes.get(0).getDatanodeId().getIpAddr() + ":"
++              + datanodes.get(0).getIpcPort();
++      // new xceiverCount value
++      long newXceiverCount = 1024;
++      String[] args =
++          { "-setDataXceiverCount", String.valueOf(newXceiverCount), dn1Address };
++      assertEquals(0, admin.run(args));
++
++      assertEquals(newXceiverCount, (long) datanodes.get(0)
++          .getDataXceiverCount());
++      assertEquals(DEFAULT_DATA_XCEIVER_COUNT, (long) datanodes.get(1)
++          .getDataXceiverCount());
++    } finally {
++      cluster.shutdown();
++    }
++  }
+ }
+\ No newline at end of file
