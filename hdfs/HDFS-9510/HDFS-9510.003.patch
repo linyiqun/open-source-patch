@@ -1,0 +1,553 @@
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSConfigKeys.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSConfigKeys.java
+index e73aa2d..075de02 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSConfigKeys.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSConfigKeys.java
+@@ -456,6 +456,9 @@
+   public static final int     DFS_DATANODE_SCAN_PERIOD_HOURS_DEFAULT = 21 * 24;  // 3 weeks.
+   public static final String  DFS_BLOCK_SCANNER_VOLUME_BYTES_PER_SECOND = "dfs.block.scanner.volume.bytes.per.second";
+   public static final long    DFS_BLOCK_SCANNER_VOLUME_BYTES_PER_SECOND_DEFAULT = 1048576L;
++  public static final String DFS_WRITE_VOLUME_THRESHOLD_TIME_MS =
++      "dfs.write.volume.threshold.time.ms";
++  public static final long DFS_WRITE_VOLUME_THRESHOLD_TIME_MS_DEFAULT = 300;
+   public static final String  DFS_DATANODE_TRANSFERTO_ALLOWED_KEY = "dfs.datanode.transferTo.allowed";
+   public static final boolean DFS_DATANODE_TRANSFERTO_ALLOWED_DEFAULT = true;
+   public static final String  DFS_HEARTBEAT_INTERVAL_KEY = "dfs.heartbeat.interval";
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsDatasetImpl.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsDatasetImpl.java
+index 37b6b9e..9d03ed6 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsDatasetImpl.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsDatasetImpl.java
+@@ -48,6 +48,7 @@
+ import javax.management.StandardMBean;
+ 
+ import com.google.common.annotations.VisibleForTesting;
++
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+ import org.apache.hadoop.classification.InterfaceAudience;
+@@ -97,6 +98,7 @@
+ import org.apache.hadoop.hdfs.server.datanode.fsdataset.ReplicaOutputStreams;
+ import org.apache.hadoop.hdfs.server.datanode.fsdataset.RoundRobinVolumeChoosingPolicy;
+ import org.apache.hadoop.hdfs.server.datanode.fsdataset.VolumeChoosingPolicy;
++import org.apache.hadoop.hdfs.server.datanode.fsdataset.impl.FsVolumeImpl;
+ import org.apache.hadoop.hdfs.server.datanode.fsdataset.impl.RamDiskReplicaTracker.RamDiskReplica;
+ import org.apache.hadoop.hdfs.server.datanode.metrics.FSDatasetMBean;
+ import org.apache.hadoop.hdfs.server.protocol.BlockRecoveryCommand.RecoveringBlock;
+@@ -242,6 +244,7 @@ public LengthInputStream getMetaDataInputStream(ExtendedBlock b)
+   private final Configuration conf;
+   private final int volFailuresTolerated;
+   private volatile boolean fsRunning;
++  private final long volumeThresholdTime;
+ 
+   final ReplicaMap volumeMap;
+   final Map<String, Set<Long>> deletingBlock;
+@@ -274,6 +277,9 @@ public LengthInputStream getMetaDataInputStream(ExtendedBlock b)
+     volFailuresTolerated =
+       conf.getInt(DFSConfigKeys.DFS_DATANODE_FAILED_VOLUMES_TOLERATED_KEY,
+                   DFSConfigKeys.DFS_DATANODE_FAILED_VOLUMES_TOLERATED_DEFAULT);
++    volumeThresholdTime =
++        conf.getLong(DFSConfigKeys.DFS_WRITE_VOLUME_THRESHOLD_TIME_MS,
++            DFSConfigKeys.DFS_WRITE_VOLUME_THRESHOLD_TIME_MS_DEFAULT);
+ 
+     String[] dataDirs = conf.getTrimmedStrings(DFSConfigKeys.DFS_DATANODE_DATA_DIR_KEY);
+     Collection<StorageLocation> dataLocations = DataNode.getStorageLocations(conf);
+@@ -792,9 +798,20 @@ public synchronized ReplicaInputStreams getTmpInputStreams(ExtendedBlock b,
+     ReplicaInfo info = getReplicaInfo(b);
+     FsVolumeReference ref = info.getVolume().obtainReference();
+     try {
++      FsVolumeImpl v;
++      long startTime = Time.monotonicNow();
+       InputStream blockInStream = openAndSeek(info.getBlockFile(), blkOffset);
+       try {
+         InputStream metaInStream = openAndSeek(info.getMetaFile(), metaOffset);
++        long duration = Time.monotonicNow() - startTime;
++        v = (FsVolumeImpl) ref.getVolume();
++        if (duration > volumeThresholdTime) {
++          LOG.warn("Slow getTmpInputStreams from volume=" + v.getBasePath()
++              + " took " + duration + "ms (threshold=" + volumeThresholdTime
++              + "ms)");
++          v.metric.addGetTmpInputStreamsTimeout(duration);
++        }
++        v.metric.addGetTmpInputStreamsOp(duration);
+         return new ReplicaInputStreams(blockInStream, metaInStream, ref);
+       } catch (IOException e) {
+         IOUtils.cleanup(null, blockInStream);
+@@ -1330,7 +1347,16 @@ public synchronized ReplicaHandler createRbw(
+ 
+     File f;
+     try {
++      long startTime = Time.monotonicNow();
+       f = v.createRbwFile(b.getBlockPoolId(), b.getLocalBlock());
++      long duration = Time.monotonicNow() - startTime;
++
++      if (duration > volumeThresholdTime) {
++        LOG.warn("Slow create RbwFile to volume=" + v.getBasePath() + " took "
++            + +duration + "ms (threshold=" + volumeThresholdTime + "ms)");
++        v.metric.addCreateRbwFileTimeout(duration);
++      }
++      v.metric.addCreateRbwFileOp(duration);
+     } catch (IOException e) {
+       IOUtils.cleanup(null, ref);
+       throw e;
+@@ -1485,7 +1511,16 @@ public ReplicaHandler createTemporary(
+           // create a temporary file to hold block in the designated volume
+           File f;
+           try {
++            long startTime = Time.monotonicNow();
+             f = v.createTmpFile(b.getBlockPoolId(), b.getLocalBlock());
++            long duration = Time.monotonicNow() - startTime;
++            if (duration > volumeThresholdTime) {
++              LOG.warn("Slow create tmpFile to volume=" + v.getBasePath()
++                  + " took " + duration + "ms (threshold="
++                  + volumeThresholdTime + "ms)");
++              v.metric.addCreateTmpFileTimeout(duration);
++            }
++            v.metric.addCreateTmpFileOp(duration);
+           } catch (IOException e) {
+             IOUtils.cleanup(null, ref);
+             throw e;
+@@ -3103,5 +3138,10 @@ boolean reserveLockedMemory(long bytesNeeded) {
+     evictLazyPersistBlocks(bytesNeeded);
+     return cacheManager.reserve(bytesNeeded) > 0;
+   }
++
++  @VisibleForTesting
++  public List<FsVolumeImpl> getVolumes() {
++    return volumes.getVolumes();
++  }
+ }
+ 
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsVolumeImpl.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsVolumeImpl.java
+index 126f667..2d6d954 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsVolumeImpl.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsVolumeImpl.java
+@@ -94,6 +94,9 @@
+   private AtomicLong reservedForReplicas;
+   private long recentReserved = 0;
+ 
++  // Disk volumn metric info
++  FsVolumeMetrics metric;
++
+   // Capacity configured. This is useful when we want to
+   // limit the visible capacity for tests. If negative, then we just
+   // query from the filesystem.
+@@ -121,6 +124,7 @@
+     this.storageType = storageType;
+     this.configuredCapacity = -1;
+     cacheExecutor = initializeCacheExecutor(parent);
++    metric = FsVolumeMetrics.create(this);
+   }
+ 
+   protected ThreadPoolExecutor initializeCacheExecutor(File parent) {
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsVolumeMetrics.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsVolumeMetrics.java
+new file mode 100644
+index 0000000..006e139
+--- /dev/null
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsVolumeMetrics.java
+@@ -0,0 +1,116 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.hadoop.hdfs.server.datanode.fsdataset.impl;
++
++import java.util.Map;
++
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
++import org.apache.hadoop.metrics2.annotation.Metric;
++import org.apache.hadoop.metrics2.annotation.Metrics;
++import org.apache.hadoop.metrics2.lib.DefaultMetricsSystem;
++import org.apache.hadoop.metrics2.lib.MetricsRegistry;
++import org.apache.hadoop.metrics2.lib.MutableRate;
++
++import com.google.common.collect.Maps;
++
++@Metrics(about = "FsVolume metrics", context = "dfs")
++public class FsVolumeMetrics {
++  static final Log LOG = LogFactory.getLog(FsVolumeMetrics.class);
++  private static final Map<String, FsVolumeMetrics> REGISTRY =
++      Maps.newHashMap();
++  int getTmpInputStreamsCounter;
++  int createTmpFileCounter;
++  int createRbwFileCounter;
++  int getTmpInputStreamsTimeoutCounter;
++  int createTmpFileTimeoutCounter;
++  int createRbwFileTimeoutCounter;
++  MetricsRegistry registry = null;
++
++  @Metric
++  MutableRate getTmpInputStreamsOp;
++  @Metric
++  MutableRate createTmpFileOp;
++  @Metric
++  MutableRate createRbwFileOp;
++
++  @Metric
++  MutableRate getTmpInputStreamsTimeout;
++  @Metric
++  MutableRate createTmpFileTimeout;
++  @Metric
++  MutableRate createRbwFileTimeout;
++
++  private FsVolumeMetrics(FsVolumeImpl volume) {
++    this.createRbwFileCounter = 0;
++    this.createTmpFileCounter = 0;
++    this.getTmpInputStreamsCounter = 0;
++    this.createRbwFileTimeoutCounter = 0;
++    this.createTmpFileTimeoutCounter = 0;
++    this.getTmpInputStreamsTimeoutCounter = 0;
++
++    String name = "fsVolume:" + volume.getBasePath();
++    LOG.info("Register fsVolumn metric for path: " + name);
++    registry = new MetricsRegistry(name);
++  }
++
++  static FsVolumeMetrics create(FsVolumeImpl volume) {
++    String n = "fsVolume:" + volume.getBasePath();
++    LOG.info("Create fsVolumn metric for path: " + n);
++    synchronized (REGISTRY) {
++      FsVolumeMetrics m = REGISTRY.get(n);
++      if (m == null) {
++        m = new FsVolumeMetrics(volume);
++        DefaultMetricsSystem.instance().register(n, null, m);
++        REGISTRY.put(n, m);
++      }
++
++      return m;
++    }
++  }
++
++  public void addGetTmpInputStreamsOp(long time) {
++    getTmpInputStreamsCounter++;
++    getTmpInputStreamsOp.add(time);
++  }
++
++  public void addGetTmpInputStreamsTimeout(long time) {
++    getTmpInputStreamsTimeoutCounter++;
++    getTmpInputStreamsTimeout.add(time);
++  }
++
++  public void addCreateTmpFileOp(long time) {
++    createTmpFileCounter++;
++    createTmpFileOp.add(time);
++  }
++
++  public void addCreateTmpFileTimeout(long time) {
++    createTmpFileTimeoutCounter++;
++    createTmpFileTimeout.add(time);
++  }
++
++  public void addCreateRbwFileOp(long time) {
++    createRbwFileCounter++;
++    createRbwFileOp.add(time);
++  }
++
++  public void addCreateRbwFileTimeout(long time) {
++    createRbwFileTimeoutCounter++;
++    createRbwFileTimeout.add(time);
++  }
++}
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/TestFsVolumeMetrics.java hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/TestFsVolumeMetrics.java
+new file mode 100644
+index 0000000..d772cc3
+--- /dev/null
++++ hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/TestFsVolumeMetrics.java
+@@ -0,0 +1,285 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.hadoop.hdfs.server.datanode.fsdataset.impl;
++
++import static org.junit.Assert.assertEquals;
++
++import java.io.IOException;
++import java.util.List;
++
++import org.apache.hadoop.fs.StorageType;
++import org.apache.hadoop.hdfs.DFSConfigKeys;
++import org.apache.hadoop.hdfs.HdfsConfiguration;
++import org.apache.hadoop.hdfs.MiniDFSCluster;
++import org.apache.hadoop.hdfs.protocol.ExtendedBlock;
++import org.apache.hadoop.hdfs.server.datanode.DataNode;
++import org.apache.hadoop.hdfs.server.datanode.DataNodeTestUtils;
++import org.apache.hadoop.hdfs.server.datanode.FinalizedReplica;
++import org.apache.hadoop.hdfs.server.datanode.ReplicaBeingWritten;
++import org.apache.hadoop.hdfs.server.datanode.ReplicaInPipeline;
++import org.apache.hadoop.hdfs.server.datanode.ReplicaInfo;
++import org.apache.hadoop.hdfs.server.datanode.ReplicaUnderRecovery;
++import org.apache.hadoop.hdfs.server.datanode.ReplicaWaitingToBeRecovered;
++import org.junit.Test;
++
++public class TestFsVolumeMetrics {
++  // Set the only one storage dir per datanode
++  final private static int STORAGE_PER_DATANODE = 1;
++
++  final private static int FINALIZED = 0;
++  final private static int TEMPORARY = 1;
++  final private static int RBW = 2;
++  final private static int RWR = 3;
++  final private static int RUR = 4;
++  final private static int NON_EXISTENT = 5;
++
++  /**
++   * Generate testing environment and return a collection of blocks on which to
++   * run the tests.
++   *
++   * @param bpid Block pool ID to generate blocks for
++   * @param dataSet Namespace in which to insert blocks
++   * @return Contrived blocks for further testing.
++   * @throws IOException
++   */
++  private ExtendedBlock[] setup(String bpid, FsDatasetImpl dataSet)
++      throws IOException {
++    // setup replicas map
++
++    ExtendedBlock[] blocks =
++        new ExtendedBlock[] { new ExtendedBlock(bpid, 1, 1, 2001),
++            new ExtendedBlock(bpid, 2, 1, 2002),
++            new ExtendedBlock(bpid, 3, 1, 2003),
++            new ExtendedBlock(bpid, 4, 1, 2004),
++            new ExtendedBlock(bpid, 5, 1, 2005),
++            new ExtendedBlock(bpid, 6, 1, 2006) };
++
++    ReplicaMap replicasMap = dataSet.volumeMap;
++    FsVolumeImpl vol =
++        (FsVolumeImpl) dataSet.volumes.getNextVolume(StorageType.DEFAULT, 0)
++            .getVolume();
++    ReplicaInfo replicaInfo =
++        new FinalizedReplica(blocks[FINALIZED].getLocalBlock(), vol, vol
++            .getCurrentDir().getParentFile());
++    replicasMap.add(bpid, replicaInfo);
++    replicaInfo.getBlockFile().createNewFile();
++    replicaInfo.getMetaFile().createNewFile();
++
++    replicasMap.add(
++        bpid,
++        new ReplicaInPipeline(blocks[TEMPORARY].getBlockId(), blocks[TEMPORARY]
++            .getGenerationStamp(), vol, vol.createTmpFile(bpid,
++            blocks[TEMPORARY].getLocalBlock()).getParentFile(), 0));
++
++    replicaInfo =
++        new ReplicaBeingWritten(blocks[RBW].getLocalBlock(), vol, vol
++            .createRbwFile(bpid, blocks[RBW].getLocalBlock()).getParentFile(),
++            null);
++    replicasMap.add(bpid, replicaInfo);
++    replicaInfo.getBlockFile().createNewFile();
++    replicaInfo.getMetaFile().createNewFile();
++
++    replicasMap.add(bpid,
++        new ReplicaWaitingToBeRecovered(blocks[RWR].getLocalBlock(), vol, vol
++            .createRbwFile(bpid, blocks[RWR].getLocalBlock()).getParentFile()));
++    replicasMap.add(bpid, new ReplicaUnderRecovery(new FinalizedReplica(
++        blocks[RUR].getLocalBlock(), vol, vol.getCurrentDir().getParentFile()),
++        2007));
++
++    return blocks;
++  }
++
++  @Test
++  public void testCreateTemporaryFile() throws Exception {
++    MiniDFSCluster cluster =
++        new MiniDFSCluster.Builder(new HdfsConfiguration())
++            .storagesPerDatanode(STORAGE_PER_DATANODE).build();
++    try {
++      cluster.waitActive();
++      DataNode dn = cluster.getDataNodes().get(0);
++      FsDatasetImpl dataSet =
++          (FsDatasetImpl) DataNodeTestUtils.getFSDataset(dn);
++
++      // set up replicasMap
++      String bpid = cluster.getNamesystem().getBlockPoolId();
++      ExtendedBlock[] blocks = setup(bpid, dataSet);
++
++      List<FsVolumeImpl> volumeList = dataSet.getVolumes();
++      FsVolumeImpl volume;
++      volume = volumeList.get(0);
++
++      assertEquals(0, volume.metric.createTmpFileCounter);
++      dataSet.createTemporary(StorageType.DEFAULT, blocks[NON_EXISTENT]);
++      assertEquals(1, volume.metric.createTmpFileCounter);
++    } finally {
++      cluster.shutdown();
++    }
++  }
++
++  @Test
++  public void testCreateTemporaryFileTimeout() throws Exception {
++    HdfsConfiguration conf;
++    MiniDFSCluster cluster;
++
++    conf = new HdfsConfiguration();
++    // Set volume threshold time as -1, so it will must be timeout
++    conf.set(DFSConfigKeys.DFS_WRITE_VOLUME_THRESHOLD_TIME_MS, "-1");
++    cluster =
++        new MiniDFSCluster.Builder(conf).storagesPerDatanode(
++            STORAGE_PER_DATANODE).build();
++    try {
++      cluster.waitActive();
++      DataNode dn = cluster.getDataNodes().get(0);
++      FsDatasetImpl dataSet =
++          (FsDatasetImpl) DataNodeTestUtils.getFSDataset(dn);
++
++      // set up replicasMap
++      String bpid = cluster.getNamesystem().getBlockPoolId();
++      ExtendedBlock[] blocks = setup(bpid, dataSet);
++
++      List<FsVolumeImpl> volumeList = dataSet.getVolumes();
++      FsVolumeImpl volume;
++      volume = volumeList.get(0);
++
++      assertEquals(0, volume.metric.createTmpFileTimeoutCounter);
++      dataSet.createTemporary(StorageType.DEFAULT, blocks[NON_EXISTENT]);
++      assertEquals(1, volume.metric.createTmpFileTimeoutCounter);
++    } finally {
++      cluster.shutdown();
++    }
++  }
++
++  @Test
++  public void testCreateRbwFile() throws Exception {
++    MiniDFSCluster cluster =
++        new MiniDFSCluster.Builder(new HdfsConfiguration())
++            .storagesPerDatanode(STORAGE_PER_DATANODE).build();
++    try {
++      cluster.waitActive();
++      DataNode dn = cluster.getDataNodes().get(0);
++      FsDatasetImpl dataSet =
++          (FsDatasetImpl) DataNodeTestUtils.getFSDataset(dn);
++
++      // set up replicasMap
++      String bpid = cluster.getNamesystem().getBlockPoolId();
++      ExtendedBlock[] blocks = setup(bpid, dataSet);
++
++      List<FsVolumeImpl> volumeList = dataSet.getVolumes();
++      FsVolumeImpl volume;
++      volume = volumeList.get(0);
++
++      assertEquals(0, volume.metric.createRbwFileCounter);
++      dataSet.createRbw(StorageType.DEFAULT, blocks[NON_EXISTENT], false);
++      assertEquals(1, volume.metric.createRbwFileCounter);
++    } finally {
++      cluster.shutdown();
++    }
++  }
++
++  @Test
++  public void testCreateRbwFileTimeout() throws Exception {
++    HdfsConfiguration conf;
++    MiniDFSCluster cluster;
++
++    conf = new HdfsConfiguration();
++    // Set volume threshold time as -1, so it will must be timeout
++    conf.set(DFSConfigKeys.DFS_WRITE_VOLUME_THRESHOLD_TIME_MS, "-1");
++    cluster =
++        new MiniDFSCluster.Builder(conf).storagesPerDatanode(
++            STORAGE_PER_DATANODE).build();
++    try {
++      cluster.waitActive();
++      DataNode dn = cluster.getDataNodes().get(0);
++      FsDatasetImpl dataSet =
++          (FsDatasetImpl) DataNodeTestUtils.getFSDataset(dn);
++
++      // set up replicasMap
++      String bpid = cluster.getNamesystem().getBlockPoolId();
++      ExtendedBlock[] blocks = setup(bpid, dataSet);
++
++      List<FsVolumeImpl> volumeList = dataSet.getVolumes();
++      FsVolumeImpl volume;
++      volume = volumeList.get(0);
++
++      assertEquals(0, volume.metric.createRbwFileTimeoutCounter);
++      dataSet.createRbw(StorageType.DEFAULT, blocks[NON_EXISTENT], false);
++      assertEquals(1, volume.metric.createRbwFileTimeoutCounter);
++    } finally {
++      cluster.shutdown();
++    }
++  }
++
++  @Test
++  public void testGetTmpInputStreams() throws Exception {
++    MiniDFSCluster cluster =
++        new MiniDFSCluster.Builder(new HdfsConfiguration())
++            .storagesPerDatanode(STORAGE_PER_DATANODE).build();
++    try {
++      cluster.waitActive();
++      DataNode dn = cluster.getDataNodes().get(0);
++      FsDatasetImpl dataSet =
++          (FsDatasetImpl) DataNodeTestUtils.getFSDataset(dn);
++
++      // set up replicasMap
++      String bpid = cluster.getNamesystem().getBlockPoolId();
++      ExtendedBlock[] blocks = setup(bpid, dataSet);
++
++      List<FsVolumeImpl> volumeList = dataSet.getVolumes();
++      FsVolumeImpl volume;
++      volume = volumeList.get(0);
++
++      assertEquals(0, volume.metric.getTmpInputStreamsCounter);
++      dataSet.getTmpInputStreams(blocks[FINALIZED], 0, 0);
++      assertEquals(1, volume.metric.getTmpInputStreamsCounter);
++    } finally {
++      cluster.shutdown();
++    }
++  }
++
++  @Test
++  public void testGetTmpInputStreamsTimeout() throws Exception {
++    HdfsConfiguration conf;
++    MiniDFSCluster cluster;
++
++    conf = new HdfsConfiguration();
++    // Set volume threshold time as -1, so it will must be timeout
++    conf.set(DFSConfigKeys.DFS_WRITE_VOLUME_THRESHOLD_TIME_MS, "-1");
++    cluster =
++        new MiniDFSCluster.Builder(conf).storagesPerDatanode(
++            STORAGE_PER_DATANODE).build();
++    try {
++      cluster.waitActive();
++      DataNode dn = cluster.getDataNodes().get(0);
++      FsDatasetImpl dataSet =
++          (FsDatasetImpl) DataNodeTestUtils.getFSDataset(dn);
++
++      String bpid = cluster.getNamesystem().getBlockPoolId();
++      ExtendedBlock[] blocks = setup(bpid, dataSet);
++
++      List<FsVolumeImpl> volumeList = dataSet.getVolumes();
++      FsVolumeImpl volume;
++      volume = volumeList.get(0);
++
++      assertEquals(0, volume.metric.getTmpInputStreamsTimeoutCounter);
++      dataSet.getTmpInputStreams(blocks[FINALIZED], 0, 0);
++      assertEquals(1, volume.metric.getTmpInputStreamsTimeoutCounter);
++    } finally {
++      cluster.shutdown();
++    }
++  }
++}
