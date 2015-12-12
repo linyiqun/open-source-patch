@@ -1,0 +1,159 @@
+diff --git hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/ContainerImpl.java hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/ContainerImpl.java
+index eff2188..73b3e29 100644
+--- hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/ContainerImpl.java
++++ hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/ContainerImpl.java
+@@ -592,6 +592,7 @@ public ContainerState transition(ContainerImpl container,
+           container.recoveredStatus == RecoveredContainerStatus.REQUESTED) {
+         // container was killed but never launched
+         container.metrics.killedContainer();
++        container.metrics.containerFailedBeforeLaunched();
+         NMAuditLogger.logSuccess(container.user,
+             AuditConstants.FINISH_KILLED_CONTAINER, "ContainerImpl",
+             container.containerId.getApplicationAttemptId().getApplicationId(),
+@@ -660,6 +661,8 @@ public ContainerState transition(ContainerImpl container,
+           LOG.warn("Failed to parse resource-request", e);
+           container.cleanup();
+           container.metrics.endInitingContainer();
++          container.metrics.containerLocalizeFailed();
++          container.metrics.containerFailedBeforeLaunched();
+           return ContainerState.LOCALIZATION_FAILED;
+         }
+         Map<LocalResourceVisibility, Collection<LocalResourceRequest>> req =
+@@ -776,6 +779,7 @@ public ContainerState transition(ContainerImpl container,
+     public void transition(ContainerImpl container, ContainerEvent event) {
+       container.sendContainerMonitorStartEvent();
+       container.metrics.runningContainer();
++      container.metrics.containerLaunchedSuccess();
+       container.wasLaunched  = true;
+ 
+       if (container.recoveredAsKilled) {
+@@ -900,6 +904,7 @@ public void transition(ContainerImpl container, ContainerEvent event) {
+       // resources.
+       container.cleanup();
+       container.metrics.endInitingContainer();
++      container.metrics.containerFailedBeforeLaunched();
+       ContainerKillEvent killEvent = (ContainerKillEvent) event;
+       container.exitCode = killEvent.getContainerExitStatus();
+       container.addDiagnostics(killEvent.getDiagnostic(), "\n");
+@@ -1007,6 +1012,7 @@ public void transition(ContainerImpl container, ContainerEvent event) {
+       container.addDiagnostics(killEvent.getDiagnostic(), "\n");
+       container.addDiagnostics("Container is killed before being launched.\n");
+       container.metrics.killedContainer();
++      container.metrics.containerFailedBeforeLaunched();
+       NMAuditLogger.logSuccess(container.user,
+           AuditConstants.FINISH_KILLED_CONTAINER, "ContainerImpl",
+           container.containerId.getApplicationAttemptId().getApplicationId(),
+@@ -1081,6 +1087,11 @@ public void transition(ContainerImpl container, ContainerEvent event) {
+     @Override
+     public void transition(ContainerImpl container, ContainerEvent event) {
+       container.metrics.killedContainer();
++      if (container.wasLaunched) {
++        container.metrics.containerKilledAfterLaunched();
++      } else {
++        container.metrics.containerFailedBeforeLaunched();
++      }
+       NMAuditLogger.logSuccess(container.user,
+           AuditConstants.FINISH_KILLED_CONTAINER, "ContainerImpl",
+           container.containerId.getApplicationAttemptId().getApplicationId(),
+@@ -1099,6 +1110,9 @@ public void transition(ContainerImpl container, ContainerEvent event) {
+     public void transition(ContainerImpl container, ContainerEvent event) {
+       if (container.wasLaunched) {
+         container.metrics.endRunningContainer();
++        container.metrics.containerKilledAfterLaunched();
++      } else {
++        container.metrics.containerFailedBeforeLaunched();
+       }
+       container.metrics.killedContainer();
+       NMAuditLogger.logSuccess(container.user,
+diff --git hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/metrics/NodeManagerMetrics.java hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/metrics/NodeManagerMetrics.java
+index a38d0b7..31151fa 100644
+--- hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/metrics/NodeManagerMetrics.java
++++ hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/metrics/NodeManagerMetrics.java
+@@ -35,6 +35,14 @@
+   @Metric MutableCounterInt containersCompleted;
+   @Metric MutableCounterInt containersFailed;
+   @Metric MutableCounterInt containersKilled;
++  @Metric
++  MutableCounterInt containerLaunchedSuccess;
++  @Metric
++  MutableCounterInt containerLocalizeFailed;
++  @Metric
++  MutableCounterInt containerFailedBeforeLaunched;
++  @Metric
++  MutableCounterInt containerKilledAfterLaunched;
+   @Metric("# of initializing containers")
+       MutableGaugeInt containersIniting;
+   @Metric MutableGaugeInt containersRunning;
+@@ -211,4 +219,35 @@ public int getGoodLocalDirsDiskUtilizationPerc() {
+     return goodLocalDirsDiskUtilizationPerc.value();
+   }
+ 
++  public void containerLocalizeFailed() {
++    containerLocalizeFailed.incr();
++  }
++
++  public int getLocalizeFailedContainers() {
++    return containerLocalizeFailed.value();
++  }
++
++  public void containerLaunchedSuccess() {
++    containerLaunchedSuccess.incr();
++  }
++
++  public int getLaunchedSuccessContainers() {
++    return containerLaunchedSuccess.value();
++  }
++
++  public void containerFailedBeforeLaunched() {
++    containerFailedBeforeLaunched.incr();
++  }
++
++  public int getFailedBeforeLaunchedContainers() {
++    return containerFailedBeforeLaunched.value();
++  }
++
++  public void containerKilledAfterLaunched() {
++    containerKilledAfterLaunched.incr();
++  }
++
++  public int getKilledAfterLaunchedContainers() {
++    return containerKilledAfterLaunched.value();
++  }
+ }
+diff --git hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/TestContainer.java hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/TestContainer.java
+index 2834e30..0828462 100644
+--- hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/TestContainer.java
++++ hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/TestContainer.java
+@@ -587,6 +587,32 @@ public void testLaunchAfterKillRequest() throws Exception {
+       }
+     }
+   }
++
++  @Test
++  @SuppressWarnings("unchecked")
++  public void testContainerLaunched() throws Exception {
++    WrappedContainer wc = null;
++    try {
++      wc = new WrappedContainer(13, 314159265358979L, 4344, "yak");
++      wc.initContainer();
++      wc.localizeResources();
++      int running = metrics.getRunningContainers();
++      wc.launchContainer();
++      assertEquals(running + 1, metrics.getRunningContainers());
++      assertEquals(1, metrics.getLaunchedSuccessContainers());
++      reset(wc.localizerBus);
++      wc.containerKilledOnRequest();
++      assertEquals(ContainerState.EXITED_WITH_FAILURE, wc.c.getContainerState());
++      assertNull(wc.c.getLocalizedResources());
++      verifyCleanupCall(wc);
++      wc.containerResourcesCleanup();
++      assertEquals(ContainerState.DONE, wc.c.getContainerState());
++    } finally {
++      if (wc != null) {
++        wc.finished();
++      }
++    }
++  }
+   
+   private void verifyCleanupCall(WrappedContainer wc) throws Exception {
+     ResourcesReleasedMatcher matchesReq =
