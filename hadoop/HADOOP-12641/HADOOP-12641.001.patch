@@ -1,0 +1,213 @@
+diff --git hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/fs/shell/Ls.java hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/fs/shell/Ls.java
+index c7e80b6..70e23ef 100644
+--- hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/fs/shell/Ls.java
++++ hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/fs/shell/Ls.java
+@@ -29,6 +29,8 @@
+ import org.apache.hadoop.fs.FileStatus;
+ import org.apache.hadoop.fs.Path;
+ 
++import com.google.common.annotations.VisibleForTesting;
++
+ /**
+  * Get a listing of all files in that match the file patterns.
+  */
+@@ -42,7 +44,7 @@ public static void registerCommands(CommandFactory factory) {
+   }
+   
+   public static final String NAME = "ls";
+-  public static final String USAGE = "[-d] [-h] [-R] [<path> ...]";
++  public static final String USAGE = "[-d] [-h] [-R] [-l] [<path> ...]";
+   public static final String DESCRIPTION =
+ 		    "List the contents that match the specified file pattern. If " +
+ 		    "path is not specified, the contents of /user/<currentUser> " +
+@@ -53,7 +55,9 @@ public static void registerCommands(CommandFactory factory) {
+ 		    "-d:  Directories are listed as plain files.\n" +
+ 		    "-h:  Formats the sizes of files in a human-readable fashion " +
+ 		    "rather than a number of bytes.\n" +
+-		    "-R:  Recursively list the contents of directories.";
++		    "-R:  Recursively list the contents of directories.\n" +
++		    "-l:  The limited number of files records's info which would be " +
++		    "displayed, the max value is 1024.\n";
+ 		  
+   
+ 
+@@ -61,9 +65,12 @@ public static void registerCommands(CommandFactory factory) {
+     new SimpleDateFormat("yyyy-MM-dd HH:mm");
+ 
+   protected int maxRepl = 3, maxLen = 10, maxOwner = 0, maxGroup = 0;
++  protected int limitedDisplayedNum = 1024;
++  protected int displayedRecordNum = 0;
+   protected String lineFormat;
+   protected boolean dirRecurse;
+ 
++  protected boolean limitedDisplay = false;
+   protected boolean humanReadable = false;
+ 
+   protected String formatSize(long size) {
+@@ -75,11 +82,12 @@ protected String formatSize(long size) {
+   @Override
+   protected void processOptions(LinkedList<String> args)
+   throws IOException {
+-    CommandFormat cf = new CommandFormat(0, Integer.MAX_VALUE, "d", "h", "R");
++    CommandFormat cf = new CommandFormat(0, Integer.MAX_VALUE, "d", "h", "R", "l");
+     cf.parse(args);
+     dirRecurse = !cf.getOpt("d");
+     setRecursive(cf.getOpt("R") && dirRecurse);
+     humanReadable = cf.getOpt("h");
++    limitedDisplay = cf.getOpt("l");
+     if (args.isEmpty()) args.add(Path.CUR_DIR);
+   }
+ 
+@@ -99,12 +107,32 @@ protected void processPaths(PathData parent, PathData ... items)
+     if (parent != null && !isRecursive() && items.length != 0) {
+       out.println("Found " + items.length + " items");
+     }
+-    adjustColumnWidths(items);
+-    super.processPaths(parent, items);
++
++    PathData[] newItems;
++    if (limitedDisplay) {
++      int length = items.length;
++      if (length > limitedDisplayedNum) {
++        length = limitedDisplayedNum;
++        out.println("Found " + items.length + " items"
++            + ", more than the limited displayed num " + limitedDisplayedNum);
++      }
++      newItems = new PathData[length];
++
++      for (int i = 0; i < length; i++) {
++        newItems[i] = items[i];
++      }
++      items = null;
++    } else {
++      newItems = items;
++    }
++
++    adjustColumnWidths(newItems);
++    super.processPaths(parent, newItems);
+   }
+ 
+   @Override
+   protected void processPath(PathData item) throws IOException {
++    displayedRecordNum++;
+     FileStatus stat = item.stat;
+     String line = String.format(lineFormat,
+         (stat.isDirectory() ? "d" : "-"),
+@@ -149,6 +177,20 @@ private int maxLength(int n, Object value) {
+     return Math.max(n, (value != null) ? String.valueOf(value).length() : 0);
+   }
+ 
++  public int getLimitedDisplayedNum() {
++    return limitedDisplayedNum;
++  }
++
++  @VisibleForTesting
++  public int setLimitedDisplayedNum(int limitedDisplayedNum) {
++    return this.limitedDisplayedNum = limitedDisplayedNum;
++  }
++
++  @VisibleForTesting
++  public int getDisplayedRecordNum() {
++    return displayedRecordNum;
++  }
++
+   /**
+    * Get a recursive listing of all files in that match the file patterns.
+    * Same as "-ls -R"
+diff --git hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/fs/shell/TestLs.java hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/fs/shell/TestLs.java
+new file mode 100644
+index 0000000..295f6dc
+--- /dev/null
++++ hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/fs/shell/TestLs.java
+@@ -0,0 +1,91 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.hadoop.fs.shell;
++
++import org.apache.hadoop.conf.Configuration;
++import org.apache.hadoop.fs.FileSystem;
++import org.apache.hadoop.fs.Path;
++import org.junit.After;
++import org.junit.Assert;
++import org.junit.Before;
++import org.junit.Test;
++
++/**
++ * JUnit test class for {@link org.apache.hadoop.fs.shell.Ls}
++ *
++ */
++public class TestLs {
++  private static final String TEST_ROOT_DIR = System.getProperty(
++      "test.build.data", "build/test/data") + "/testPD";
++  private static final String DIR_NAME = "d1";
++  private static final int CHILD_FILE_NUM = 3;
++  protected FileSystem fs;
++  private static Configuration conf;
++  protected Path testDir;
++
++  @Before
++  public void initialize() throws Exception {
++    conf = new Configuration();
++    fs = FileSystem.getLocal(conf);
++    testDir = new Path(TEST_ROOT_DIR);
++
++    // don't want scheme on the path, just an absolute path
++    testDir = new Path(fs.makeQualified(testDir).toUri().getPath());
++    fs.mkdirs(testDir);
++
++    FileSystem.setDefaultUri(conf, fs.getUri());
++    fs.setWorkingDirectory(testDir);
++    fs.mkdirs(new Path("d1"));
++    for (int i = 0; i < CHILD_FILE_NUM; i++) {
++      fs.createNewFile(new Path(DIR_NAME, "f" + i));
++    }
++  }
++
++  @After
++  public void cleanup() throws Exception {
++    fs.delete(testDir, true);
++    fs.close();
++  }
++
++  @Test (timeout = 30000)
++  public void testLsWithLimitedDisplay() throws Exception {
++    int limitDisplayedNum;
++    Ls ls;
++
++    ls = new Ls();
++    limitDisplayedNum = 1;
++    ls.setConf(conf);
++    ls.setLimitedDisplayedNum(limitDisplayedNum);
++
++    String[] args;
++    Assert.assertEquals(limitDisplayedNum, ls.getLimitedDisplayedNum());
++    args = new String[] { "-l", DIR_NAME };
++    ls.run(args);
++    // The childFileNum is more than limit value, so displayed num will decrease
++    Assert
++        .assertEquals(ls.getDisplayedRecordNum(), ls.getLimitedDisplayedNum());
++
++    ls = new Ls();
++    ls.setConf(conf);
++    ls.setLimitedDisplayedNum(limitDisplayedNum);
++    args = new String[] { DIR_NAME };
++    ls.run(args);
++    // There is no limitation of displaying file info
++    Assert.assertEquals(CHILD_FILE_NUM, ls.getDisplayedRecordNum());
++  }
++}
