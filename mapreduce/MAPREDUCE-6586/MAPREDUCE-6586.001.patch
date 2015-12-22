@@ -1,0 +1,24 @@
+diff --git hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/v2/app/webapp/TaskPage.java hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/v2/app/webapp/TaskPage.java
+index 8aa8bb6..08eda1a 100644
+--- hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/v2/app/webapp/TaskPage.java
++++ hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/v2/app/webapp/TaskPage.java
+@@ -28,6 +28,7 @@
+ import java.util.Collection;
+ 
+ import org.apache.commons.lang.StringEscapeUtils;
++import org.apache.hadoop.mapreduce.v2.api.records.TaskAttemptState;
+ import org.apache.hadoop.mapreduce.v2.app.job.TaskAttempt;
+ import org.apache.hadoop.mapreduce.v2.app.webapp.dao.TaskAttemptInfo;
+ import org.apache.hadoop.mapreduce.v2.util.MRWebAppUtil;
+@@ -79,6 +80,11 @@ protected void render(Block html) {
+         TaskAttemptInfo ta = new TaskAttemptInfo(attempt, true);
+         String progress = percent(ta.getProgress() / 100);
+ 
++        if (attempt.getState() == TaskAttemptState.FAILED
++            || attempt.getState() == TaskAttemptState.KILLED) {
++          progress = percent(0);
++        }
++
+         String nodeHttpAddr = ta.getNode();
+         String diag = ta.getNote() == null ? "" : ta.getNote();
+         attemptsTableData.append("[\"")
