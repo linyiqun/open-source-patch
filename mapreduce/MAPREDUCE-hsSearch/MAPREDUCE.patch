@@ -1,0 +1,320 @@
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/v2/app/AppContext.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/v2/app/AppContext.java
+index 31e282a..f0300d3 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/v2/app/AppContext.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/v2/app/AppContext.java
+@@ -51,6 +51,8 @@
+ 
+   Map<JobId, Job> getAllJobs();
+ 
++  Map<JobId, Job> getDisplayedJobs(String filterName);
++
+   @SuppressWarnings("rawtypes")
+   EventHandler getEventHandler();
+ 
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/v2/app/MRAppMaster.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/v2/app/MRAppMaster.java
+index 26caa2d..044b3b7 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/v2/app/MRAppMaster.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/v2/app/MRAppMaster.java
+@@ -1028,6 +1028,11 @@ public void resetIsLastAMRetry() {
+     public String getNMHostname() {
+       return nmHost;
+     }
++
++    @Override
++    public Map<JobId, Job> getDisplayedJobs(String filterName) {
++      return null;
++    }
+   }
+ 
+   @SuppressWarnings("unchecked")
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/v2/app/webapp/AMParams.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/v2/app/webapp/AMParams.java
+index 2ca7ff5..6cb4d1d 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/v2/app/webapp/AMParams.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/v2/app/webapp/AMParams.java
+@@ -31,4 +31,5 @@
+   static final String ATTEMPT_STATE = "attempt.state";
+   static final String COUNTER_GROUP = "counter.group";
+   static final String COUNTER_NAME = "counter.name";
++  static final String JOBFILTER_NAME = "jobfilter.name";
+ }
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/test/java/org/apache/hadoop/mapreduce/v2/app/MockAppContext.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/test/java/org/apache/hadoop/mapreduce/v2/app/MockAppContext.java
+index dae0aa7..e7ee19f 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/test/java/org/apache/hadoop/mapreduce/v2/app/MockAppContext.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/test/java/org/apache/hadoop/mapreduce/v2/app/MockAppContext.java
+@@ -148,4 +148,9 @@ public String getNMHostname() {
+     // bogus - Not Required
+     return null;
+   }
++
++  @Override
++  public Map<JobId, Job> getDisplayedJobs(String filterName) {
++    return null;
++  }
+ }
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/test/java/org/apache/hadoop/mapreduce/v2/app/TestRuntimeEstimators.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/test/java/org/apache/hadoop/mapreduce/v2/app/TestRuntimeEstimators.java
+index fe0f341..14ddf4b 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/test/java/org/apache/hadoop/mapreduce/v2/app/TestRuntimeEstimators.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/test/java/org/apache/hadoop/mapreduce/v2/app/TestRuntimeEstimators.java
+@@ -900,5 +900,10 @@ public String getNMHostname() {
+       // bogus - Not Required
+       return null;
+     }
++
++    @Override
++    public Map<JobId, Job> getDisplayedJobs(String filterName) {
++      return null;
++    }
+   }
+ }
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/src/main/java/org/apache/hadoop/mapreduce/v2/jobhistory/JHAdminConfig.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/src/main/java/org/apache/hadoop/mapreduce/v2/jobhistory/JHAdminConfig.java
+index f7cba9f..55355a8 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/src/main/java/org/apache/hadoop/mapreduce/v2/jobhistory/JHAdminConfig.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/src/main/java/org/apache/hadoop/mapreduce/v2/jobhistory/JHAdminConfig.java
+@@ -98,6 +98,11 @@
+   public static final String MR_HISTORY_JOBLIST_CACHE_SIZE =
+     MR_HISTORY_PREFIX + "joblist.cache.size";
+   public static final int DEFAULT_MR_HISTORY_JOBLIST_CACHE_SIZE = 20000;
++
++  /** Size of the job-cache displayed.*/
++  public static final String MR_HISTORY_JOBLIST_CACHE_DISPLAYED_SIZE =
++    MR_HISTORY_PREFIX + "joblist.cache-displayed.size";
++  public static final int DEFAULT_MR_HISTORY_JOBLIST_CACHE_DISPLAYED_SIZE = 1000;
+   
+   /** The location of the Kerberos keytab file.*/
+   public static final String MR_HISTORY_KEYTAB = MR_HISTORY_PREFIX + "keytab";
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/resources/mapred-default.xml b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/resources/mapred-default.xml
+index 9c86513..89445c2 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/resources/mapred-default.xml
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/resources/mapred-default.xml
+@@ -2136,4 +2136,11 @@
+     app master.
+   </description>
+ </property>
++
++<property>
++  <name>mapreduce.jobhistory.joblist.cache-displayed.size</name>
++  <value>1000</value>
++  <description>The size of job-list cache displayed in the jobHistory web ui.
++  </description>
++</property>
+ </configuration>
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/CachedHistoryStorage.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/CachedHistoryStorage.java
+index 8c9abc3..cd760d4 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/CachedHistoryStorage.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/CachedHistoryStorage.java
+@@ -53,6 +53,9 @@
+   // The number of loaded jobs.
+   private int loadedJobCacheSize;
+ 
++  // The number of job cache Displayed
++  private int cacheDisplayedSize;
++
+   private HistoryFileManager hsManager;
+ 
+   @Override
+@@ -74,6 +77,10 @@ private void createLoadedJobCache(Configuration conf) {
+         JHAdminConfig.MR_HISTORY_LOADED_JOB_CACHE_SIZE,
+         JHAdminConfig.DEFAULT_MR_HISTORY_LOADED_JOB_CACHE_SIZE);
+ 
++    cacheDisplayedSize =
++        conf.getInt(JHAdminConfig.MR_HISTORY_JOBLIST_CACHE_DISPLAYED_SIZE,
++            JHAdminConfig.DEFAULT_MR_HISTORY_JOBLIST_CACHE_DISPLAYED_SIZE);
++
+     loadedJobCache = Collections.synchronizedMap(new LinkedHashMap<JobId, Job>(
+         loadedJobCacheSize + 1, 0.75f, true) {
+       @Override
+@@ -243,4 +250,40 @@ public static JobsInfo getPartialJobs(Collection<Job> jobs, Long offset,
+     }
+     return allJobs;
+   }
++
++  @Override
++  public Map<JobId, Job> getPartialDisplayedJobs(String filterName) {
++    LOG.debug("Called getPartialDisplayedJobs()");
++    String jobName;
++    int cacheJobSize = 0;
++
++    SortedMap<JobId, Job> result = new TreeMap<JobId, Job>();
++    try {
++      for (HistoryFileInfo mi : hsManager.getAllFileInfo()) {
++        if (mi != null) {
++          cacheJobSize++;
++          if (cacheJobSize > cacheDisplayedSize) {
++            LOG.info("GetPartialDisplayedJobs operation ends"
++                + ", AllFileInfo size is more than cacheDisplayedSize: "
++                + cacheDisplayedSize);
++            break;
++          }
++
++          JobId id = mi.getJobId();
++          jobName = mi.getJobIndexInfo().getJobName();
++          if (filterName == null || filterName.length() == 0) {
++            result.put(id, new PartialJob(mi.getJobIndexInfo(), id));
++          } else if (jobName != null && jobName.length() > 0) {
++            if (jobName.contains(filterName)) {
++              result.put(id, new PartialJob(mi.getJobIndexInfo(), id));
++            }
++          }
++        }
++      }
++    } catch (IOException e) {
++      LOG.warn("Error trying to scan for all FileInfos", e);
++      throw new YarnRuntimeException(e);
++    }
++    return result;
++  }
+ }
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/HistoryStorage.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/HistoryStorage.java
+index df528df..b0597d1 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/HistoryStorage.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/HistoryStorage.java
+@@ -76,4 +76,11 @@ JobsInfo getPartialJobs(Long offset, Long count, String user,
+    * @return the job, or null if it is not found.
+    */
+   Job getFullJob(JobId jobId);
++
++  /**
++   * Get partial displayed of the cached jobs.
++   * @param filterName the filter job name
++   * @return all of the cached jobs
++   */
++  Map<JobId, Job> getPartialDisplayedJobs(String filterName);
+ }
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/JobHistory.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/JobHistory.java
+index 194b85a..14078b3 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/JobHistory.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/JobHistory.java
+@@ -399,4 +399,9 @@ public String getNMHostname() {
+     // bogus - Not Required
+     return null;
+   }
++
++  @Override
++  public Map<JobId, Job> getDisplayedJobs(String filterName) {
++    return storage.getPartialDisplayedJobs(filterName);
++  }
+ }
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/webapp/HsJobsBlock.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/webapp/HsJobsBlock.java
+index 31ecf6c..5c6b0e4 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/webapp/HsJobsBlock.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/webapp/HsJobsBlock.java
+@@ -21,6 +21,8 @@
+ import java.text.SimpleDateFormat;
+ import java.util.Date;
+ 
++import static org.apache.hadoop.mapreduce.v2.app.webapp.AMParams.JOBFILTER_NAME;
++
+ import org.apache.commons.lang.StringEscapeUtils;
+ import org.apache.hadoop.mapreduce.v2.app.AppContext;
+ import org.apache.hadoop.mapreduce.v2.app.job.Job;
+@@ -58,10 +60,17 @@
+             th()
+               .$class("ui-state-default").input("jobid").$type(InputType.text)
+               .$name("jobid").$value("input jobid")._()._().
+-             th()
++            th()
+               .input("search_confirm").$type(InputType.button).$name("search")
+               .$value("Job Search").$onclick("jobsearch()")._()._()._().
+           tr().
++            th()
++              .$class("ui-state-default").input("jobname").$type(InputType.text)
++              .$name("jobname").$value("input filetername")._()._().
++            th()
++              .input("search_confirm").$type(InputType.button).$name("search")
++              .$value("Name Search").$onclick("jobnamesearch()")._()._()._().
++          tr().
+             th("Submit Time").
+             th("Start Time").
+             th("Finish Time").
+@@ -79,7 +88,8 @@
+     // Write all the data into a JavaScript array of arrays for JQuery
+     // DataTables to display
+     StringBuilder jobsTableData = new StringBuilder("[\n");
+-    for (Job j : appContext.getAllJobs().values()) {
++    String filterName = $(JOBFILTER_NAME);
++    for (Job j : appContext.getDisplayedJobs(filterName).values()) {
+       JobInfo job = new JobInfo(j);
+       jobsTableData.append("[\"")
+       .append(dateFormat.format(new Date(job.getSubmitTime()))).append("\",\"")
+@@ -106,13 +116,20 @@
+     }
+     jobsTableData.append("]");
+ 
+-    String onClickMethod =
++    String jobIdSearchClickMethod =
+             "function jobsearch() {\n"+
+             "    var jobid = $('.jobid').val()\n"+
+             "    window.location ='/jobhistory/job/' + jobid\n"+
+             "}\n";
++
++    String jobNameSearchClickMethod =
++            "function jobnamesearch() {\n"+
++            "    var filtername = $('.jobname').val()\n"+
++            "    window.location ='/jobhistory/app/' + filtername\n"+
++            "}\n";
+     html.script().$type("text/javascript").
+-    _("var jobsTableData=" + jobsTableData + "\n" + onClickMethod)._();
++    _("var jobsTableData=" + jobsTableData + "\n" + jobIdSearchClickMethod
++        + jobNameSearchClickMethod)._();
+     tbody._().
+     tfoot().
+       tr().
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/webapp/HsNavBlock.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/webapp/HsNavBlock.java
+index 7e49d52..b894f47 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/webapp/HsNavBlock.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/webapp/HsNavBlock.java
+@@ -44,7 +44,7 @@
+       h3("Application").
+         ul().
+           li().a(url("about"), "About")._().
+-          li().a(url("app"), "Jobs")._()._();
++          li().a(url("app", ""), "Jobs")._()._();
+     if (app.getJob() != null) {
+       String jobid = MRApps.toString(app.getJob().getID());
+       nav.
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/webapp/HsWebApp.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/webapp/HsWebApp.java
+index ebc6d46..3e8d84c 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/webapp/HsWebApp.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/webapp/HsWebApp.java
+@@ -47,7 +47,7 @@ public void setup() {
+     bind(AppContext.class).toInstance(history);
+     bind(HistoryContext.class).toInstance(history);
+     route("/", HsController.class);
+-    route("/app", HsController.class);
++    route(pajoin("/app", JOBFILTER_NAME), HsController.class);
+     route(pajoin("/job", JOB_ID), HsController.class, "job");
+     route(pajoin("/conf", JOB_ID), HsController.class, "conf");
+     route(pajoin("/jobcounters", JOB_ID), HsController.class, "jobCounters");
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/test/java/org/apache/hadoop/mapreduce/v2/hs/TestJobHistory.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/test/java/org/apache/hadoop/mapreduce/v2/hs/TestJobHistory.java
+index de0de7d..fefe53f 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/test/java/org/apache/hadoop/mapreduce/v2/hs/TestJobHistory.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/test/java/org/apache/hadoop/mapreduce/v2/hs/TestJobHistory.java
+@@ -19,7 +19,6 @@
+ package org.apache.hadoop.mapreduce.v2.hs;
+ 
+ import java.util.Map;
+-
+ import java.io.IOException;
+ import java.util.LinkedList;
+ import java.util.List;
+@@ -41,6 +40,7 @@
+ 
+ import static org.junit.Assert.assertEquals;
+ import static org.mockito.Mockito.*;
++
+ import org.apache.hadoop.mapreduce.v2.app.job.Job;
+ 
+ import static org.junit.Assert.assertFalse;
+@@ -248,6 +248,12 @@ public Job getFullJob(JobId jobId) {
+         // TODO Auto-generated method stub
+         return null;
+       }
++
++      @Override
++      public Map<JobId, Job> getPartialDisplayedJobs(String filterName) {
++        // TODO Auto-generated method stub
++        return null;
++      }
+     };
+ 
+     doReturn(storage).when(jobHistory).createHistoryStorage();
