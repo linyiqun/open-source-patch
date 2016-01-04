@@ -1,0 +1,35 @@
+diff --git hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/src/main/java/org/apache/hadoop/yarn/client/cli/RMAdminCLI.java hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/src/main/java/org/apache/hadoop/yarn/client/cli/RMAdminCLI.java
+index a5e53e4..5c3b1d8 100644
+--- hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/src/main/java/org/apache/hadoop/yarn/client/cli/RMAdminCLI.java
++++ hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/src/main/java/org/apache/hadoop/yarn/client/cli/RMAdminCLI.java
+@@ -241,7 +241,7 @@ private static void printHelp(String cmd, boolean isHAEnabled) {
+                   + "label2(exclusive=false),label3\">]" +
+       " [-removeFromClusterNodeLabels <label1,label2,label3>]" +
+       " [-replaceLabelsOnNode <\"node1[:port]=label1,label2 node2[:port]=label1\">]" +
+-      " [-directlyAccessNodeLabelStore]]" +
++      " [-directlyAccessNodeLabelStore]" +
+       " [-updateNodeResource [NodeID] [MemSize] [vCores] ([OvercommitTimeout])");
+     if (isHAEnabled) {
+       appendHAUsage(summary);
+diff --git hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/src/test/java/org/apache/hadoop/yarn/client/cli/TestRMAdminCLI.java hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/src/test/java/org/apache/hadoop/yarn/client/cli/TestRMAdminCLI.java
+index f01441d..08e63ea 100644
+--- hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/src/test/java/org/apache/hadoop/yarn/client/cli/TestRMAdminCLI.java
++++ hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/src/test/java/org/apache/hadoop/yarn/client/cli/TestRMAdminCLI.java
+@@ -397,7 +397,7 @@ public void testHelp() throws Exception {
+               "[-removeFromClusterNodeLabels <label1,label2,label3>] " +
+               "[-replaceLabelsOnNode " +
+               "<\"node1[:port]=label1,label2 node2[:port]=label1\">] " +
+-              "[-directlyAccessNodeLabelStore]] [-updateNodeResource " +
++              "[-directlyAccessNodeLabelStore] [-updateNodeResource " +
+               "[NodeID] [MemSize] [vCores] ([OvercommitTimeout]) " +
+               "[-help [cmd]]"));
+       assertTrue(dataOut
+@@ -487,7 +487,7 @@ public void testHelp() throws Exception {
+               + " [username]] [-addToClusterNodeLabels <\"label1(exclusive=true),"
+                   + "label2(exclusive=false),label3\">]"
+               + " [-removeFromClusterNodeLabels <label1,label2,label3>] [-replaceLabelsOnNode "
+-              + "<\"node1[:port]=label1,label2 node2[:port]=label1\">] [-directlyAccessNodeLabelStore]] "
++              + "<\"node1[:port]=label1,label2 node2[:port]=label1\">] [-directlyAccessNodeLabelStore] "
+               + "[-updateNodeResource [NodeID] [MemSize] [vCores] ([OvercommitTimeout]) "
+               + "[-transitionToActive [--forceactive] <serviceId>] "
+               + "[-transitionToStandby <serviceId>] "
