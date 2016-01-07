@@ -1,0 +1,181 @@
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSConfigKeys.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSConfigKeys.java
+index 6986896..0bd121f 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSConfigKeys.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSConfigKeys.java
+@@ -125,6 +125,11 @@
+   public static final String  DFS_DATANODE_DUPLICATE_REPLICA_DELETION = "dfs.datanode.duplicate.replica.deletion";
+   public static final boolean DFS_DATANODE_DUPLICATE_REPLICA_DELETION_DEFAULT = true;
+ 
++  public static final String DFS_DATANODE_CACHED_DFSUSED_CHECK_INTERVAL_MS =
++      "dfs.datanode.cached-dfsused.check.interval.ms";
++  public static final long DFS_DATANODE_CACHED_DFSUSED_CHECK_INTERVAL_DEFAULT_MS =
++      600000;
++
+   public static final String  DFS_NAMENODE_PATH_BASED_CACHE_BLOCK_MAP_ALLOCATION_PERCENT =
+     "dfs.namenode.path.based.cache.block.map.allocation.percent";
+   public static final float    DFS_NAMENODE_PATH_BASED_CACHE_BLOCK_MAP_ALLOCATION_PERCENT_DEFAULT = 0.25f;
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/BlockPoolSlice.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/BlockPoolSlice.java
+index 571f085..86f9625 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/BlockPoolSlice.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/BlockPoolSlice.java
+@@ -85,6 +85,7 @@
+   private final boolean deleteDuplicateReplicas;
+   private static final String REPLICA_CACHE_FILE = "replicas";
+   private final long replicaCacheExpiry = 5*60*1000;
++  private final long cachedDfsUsedCheckTime;
+ 
+   // TODO:FEDERATION scalability issue - a thread per DU is needed
+   private final DU dfsUsage;
+@@ -117,6 +118,11 @@
+         DFSConfigKeys.DFS_DATANODE_DUPLICATE_REPLICA_DELETION,
+         DFSConfigKeys.DFS_DATANODE_DUPLICATE_REPLICA_DELETION_DEFAULT);
+ 
++    this.cachedDfsUsedCheckTime =
++        conf.getLong(
++            DFSConfigKeys.DFS_DATANODE_CACHED_DFSUSED_CHECK_INTERVAL_MS,
++            DFSConfigKeys.DFS_DATANODE_CACHED_DFSUSED_CHECK_INTERVAL_DEFAULT_MS);
++
+     // Files that were being written when the datanode was last shutdown
+     // are now moved back to the data directory. It is possible that
+     // in the future, we might want to do some sort of datanode-local
+@@ -187,11 +193,13 @@ void incDfsUsed(long value) {
+     dfsUsage.incDfsUsed(value);
+   }
+   
+-   /**
+-   * Read in the cached DU value and return it if it is less than 600 seconds
+-   * old (DU update interval). Slight imprecision of dfsUsed is not critical
+-   * and skipping DU can significantly shorten the startup time.
+-   * If the cached value is not available or too old, -1 is returned.
++  /**
++   * Read in the cached DU value and return it if it is less than
++   * cachedDfsUsedCheckTime which is set by
++   * dfs.datanode.cached-dfsused.check.interval.ms parameter. Slight imprecision
++   * of dfsUsed is not critical and skipping DU can significantly shorten the
++   * startup time. If the cached value is not available or too old, -1 is
++   * returned.
+    */
+   long loadDfsUsed() {
+     long cachedDfsUsed;
+@@ -219,7 +227,7 @@ long loadDfsUsed() {
+       }
+ 
+       // Return the cached value if mtime is okay.
+-      if (mtime > 0 && (Time.now() - mtime < 600000L)) {
++      if (mtime > 0 && (Time.now() - mtime < cachedDfsUsedCheckTime)) {
+         FsDatasetImpl.LOG.info("Cached dfsUsed found for " + currentDir + ": " +
+             cachedDfsUsed);
+         return cachedDfsUsed;
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/resources/hdfs-default.xml hadoop-hdfs-project/hadoop-hdfs/src/main/resources/hdfs-default.xml
+index 24371df..b8c7157 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/resources/hdfs-default.xml
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/resources/hdfs-default.xml
+@@ -2589,4 +2589,12 @@
+   </description>
+ </property>
+ 
++<property>
++  <name>dfs.datanode.cached-dfsused.check.interval.ms</name>
++  <value>600000</value>
++  <description>The internal check time of loading cache-dfsused
++    value.
++  </description>
++</property>
++
+ </configuration>
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/TestFsDatasetImpl.java hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/TestFsDatasetImpl.java
+index 62907ec..4e93b92 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/TestFsDatasetImpl.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/TestFsDatasetImpl.java
+@@ -48,6 +48,7 @@
+ import org.apache.hadoop.test.GenericTestUtils;
+ import org.apache.hadoop.util.DiskChecker;
+ import org.apache.hadoop.util.StringUtils;
++import org.apache.hadoop.util.Time;
+ import org.junit.Before;
+ import org.junit.Test;
+ import org.mockito.Matchers;
+@@ -56,13 +57,17 @@
+ import org.mockito.stubbing.Answer;
+ 
+ import java.io.File;
++import java.io.FileOutputStream;
+ import java.io.IOException;
++import java.io.OutputStreamWriter;
++import java.io.Writer;
+ import java.util.ArrayList;
+ import java.util.Collections;
+ import java.util.HashSet;
+ import java.util.List;
+ import java.util.Set;
+ 
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATANODE_CACHED_DFSUSED_CHECK_INTERVAL_MS;
+ import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATANODE_SCAN_PERIOD_HOURS_KEY;
+ import static org.junit.Assert.assertEquals;
+ import static org.junit.Assert.assertFalse;
+@@ -440,4 +445,65 @@ public void testDuplicateReplicaResolution() throws IOException {
+     assertSame(replica,
+         BlockPoolSlice.selectReplicaToDelete(replicaOtherNewer, replica));
+   }
++
++  @Test
++  public void testLoadingDfsUsedForVolumes() throws IOException,
++      InterruptedException {
++    List<NamespaceInfo> nsInfos = Lists.newArrayList();
++    nsInfos.add(new NamespaceInfo(0, CLUSTER_ID, BLOCK_POOL_IDS[0], 1));
++
++    long sleepInternalTime = 5000;
++    // Initial the cachedDfsUsedInternalTime larger than sleepInternalTime
++    // to avoid cache-dfsUsed time expired
++    long cachedDfsUsedInternalTime = sleepInternalTime + 10000;
++    conf.setLong(DFS_DATANODE_CACHED_DFSUSED_CHECK_INTERVAL_MS,
++        cachedDfsUsedInternalTime);
++
++    String CURRENT_DIR = "current";
++    String DU_CACHE_FILE = "dfsUsed";
++    String path = BASE_DIR + "/newData0";
++    String pathUri = new Path(path).toUri().toString();
++    StorageLocation loc = StorageLocation.parse(pathUri);
++    Storage.StorageDirectory sd = createStorageDirectory(new File(path));
++    DataStorage.VolumeBuilder builder =
++        new DataStorage.VolumeBuilder(storage, sd);
++    when(
++        storage.prepareVolume(eq(datanode), eq(loc.getFile()),
++            anyListOf(NamespaceInfo.class))).thenReturn(builder);
++
++    String cacheFilePath =
++        String.format("%s/%s/%s/%s/%s", path, CURRENT_DIR, BLOCK_POOL_IDS[0],
++            CURRENT_DIR, DU_CACHE_FILE);
++    File outFile = new File(cacheFilePath);
++
++    if (!outFile.getParentFile().exists()) {
++      outFile.getParentFile().mkdirs();
++    }
++
++    if (outFile.exists()) {
++      outFile.delete();
++    }
++
++    long usedValue = 1024;
++    try {
++      try (Writer out =
++          new OutputStreamWriter(new FileOutputStream(outFile), "UTF-8")) {
++        // Write the dfsUsed value and the time to cache file
++        out.write(Long.toString(usedValue) + " " + Long.toString(Time.now()));
++        out.flush();
++      }
++    } catch (IOException ioe) {
++    }
++
++    // Sleep in internal time
++    Thread.sleep(sleepInternalTime);
++    dataset.addVolume(loc, nsInfos);
++
++    // Get the last volume which was just added before
++    int volumesNum = dataset.getVolumes().size();
++    FsVolumeImpl newVolume = dataset.getVolumes().get(volumesNum - 1);
++    long dfsUsed = newVolume.getDfsUsed();
++
++    assertEquals(usedValue, dfsUsed);
++  }
+ }
