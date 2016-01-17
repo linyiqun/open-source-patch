@@ -1,0 +1,359 @@
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSConfigKeys.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSConfigKeys.java
+index 330c381..a491699 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSConfigKeys.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSConfigKeys.java
+@@ -18,6 +18,8 @@
+ 
+ package org.apache.hadoop.hdfs;
+ 
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATANODE_AVAILABLE_SPACE_VOLUME_CHOOSING_POLICY_BALANCED_SPACE_THRESHOLD_KEY;
++
+ import java.util.concurrent.TimeUnit;
+ 
+ import org.apache.hadoop.classification.InterfaceAudience;
+@@ -176,6 +178,11 @@
+   public static final long DFS_DN_CACHED_DFSUSED_CHECK_INTERVAL_DEFAULT_MS =
+       600000;
+ 
++  public static final String DFS_DATANODE_REFERENCE_COUNT_VOLUME_CHOOSING_POLICY_REFERENCE_COUNT_THRESHOLD_KEY =
++      "dfs.datanode.reference-count-volume-choosing-policy.reference-count-threshold";
++  public static final int DFS_DATANODE_REFERENCE_COUNT_VOLUME_CHOOSING_POLICY_REFERENCE_COUNT_THRESHOLD_DEFAULT =
++      10;
++
+   public static final String  DFS_NAMENODE_PATH_BASED_CACHE_BLOCK_MAP_ALLOCATION_PERCENT =
+     "dfs.namenode.path.based.cache.block.map.allocation.percent";
+   public static final float    DFS_NAMENODE_PATH_BASED_CACHE_BLOCK_MAP_ALLOCATION_PERCENT_DEFAULT = 0.25f;
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/FsVolumeSpi.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/FsVolumeSpi.java
+index e6ace44..ce9fe75 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/FsVolumeSpi.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/FsVolumeSpi.java
+@@ -179,4 +179,9 @@ public BlockIterator loadBlockIterator(String bpid, String name)
+    * Get the FSDatasetSpi which this volume is a part of.
+    */
+   public FsDatasetSpi getDataset();
++
++  /**
++   * Get the reference count of this volume
++   */
++  public int getReferenceCount();
+ }
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/ReferenceCountVolumeChoosingPolicy.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/ReferenceCountVolumeChoosingPolicy.java
+new file mode 100644
+index 0000000..1b3caa8
+--- /dev/null
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/ReferenceCountVolumeChoosingPolicy.java
+@@ -0,0 +1,141 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.hadoop.hdfs.server.datanode.fsdataset;
++
++import java.io.IOException;
++import java.util.ArrayList;
++import java.util.List;
++
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
++import org.apache.hadoop.conf.Configurable;
++import org.apache.hadoop.conf.Configuration;
++import org.apache.hadoop.util.DiskChecker.DiskOutOfSpaceException;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATANODE_REFERENCE_COUNT_VOLUME_CHOOSING_POLICY_REFERENCE_COUNT_THRESHOLD_DEFAULT;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATANODE_REFERENCE_COUNT_VOLUME_CHOOSING_POLICY_REFERENCE_COUNT_THRESHOLD_KEY;
++/**
++ * Choose volumes by fsVolume reference count
++ */
++public class ReferenceCountVolumeChoosingPolicy<V extends FsVolumeSpi>
++    implements VolumeChoosingPolicy<V>, Configurable{
++  public static final Log LOG = LogFactory
++      .getLog(ReferenceCountVolumeChoosingPolicy.class);
++
++  private int referenceThreshold =
++      DFS_DATANODE_REFERENCE_COUNT_VOLUME_CHOOSING_POLICY_REFERENCE_COUNT_THRESHOLD_DEFAULT;
++  private final VolumeChoosingPolicy<V> roundRobinPolicyLowReferences =
++      new RoundRobinVolumeChoosingPolicy<V>();
++  private final VolumeChoosingPolicy<V> roundRobinPolicyHighReferences =
++      new RoundRobinVolumeChoosingPolicy<V>();
++
++  @Override
++  public synchronized void setConf(Configuration conf) {
++    referenceThreshold =
++        conf.getInt(
++            DFS_DATANODE_REFERENCE_COUNT_VOLUME_CHOOSING_POLICY_REFERENCE_COUNT_THRESHOLD_KEY,
++            DFS_DATANODE_REFERENCE_COUNT_VOLUME_CHOOSING_POLICY_REFERENCE_COUNT_THRESHOLD_DEFAULT);
++  }
++
++  @Override
++  public synchronized Configuration getConf() {
++    return null;
++  }
++
++  @Override
++  public synchronized V chooseVolume(final List<V> volumes, long blockSize)
++      throws IOException {
++
++    if (volumes.size() < 1) {
++      throw new DiskOutOfSpaceException("No more available volumes");
++    }
++
++    V volume = null;
++
++    int minReferenceCount = getMinReferenceCountOfVolumes(volumes);
++    List<V> lowReferencesVolumes =
++        getLowReferencesCountVolume(volumes, minReferenceCount);
++    List<V> highReferencesVolumes =
++        getHighReferencesCountVolume(volumes, minReferenceCount);
++
++    if (isExistVolumeHasFreeSpaceForBlock(lowReferencesVolumes, blockSize)) {
++      volume =
++          roundRobinPolicyLowReferences.chooseVolume(lowReferencesVolumes,
++              blockSize);
++    } else {
++      volume =
++          roundRobinPolicyHighReferences.chooseVolume(highReferencesVolumes,
++              blockSize);
++    }
++
++    return volume;
++  }
++
++  private List<V> getHighReferencesCountVolume(final List<V> volumes,
++      int minReferenceCount) {
++    List<V> newVolumes = new ArrayList<V>();
++
++    for (V v : volumes) {
++      if (v.getReferenceCount() > (minReferenceCount + referenceThreshold)) {
++        newVolumes.add(v);
++      }
++    }
++
++    return newVolumes;
++  }
++
++  private List<V> getLowReferencesCountVolume(final List<V> volumes,
++      int minReferenceCount) {
++    List<V> newVolumes = new ArrayList<V>();
++
++    for (V v : volumes) {
++      if (v.getReferenceCount() <= (minReferenceCount + referenceThreshold)) {
++        newVolumes.add(v);
++      }
++    }
++
++    return newVolumes;
++  }
++
++  private int getMinReferenceCountOfVolumes(final List<V> volumes) {
++    int minReferenceCount = Integer.MAX_VALUE;
++
++    int curReferenceCount;
++    for (V v : volumes) {
++      curReferenceCount = v.getReferenceCount();
++      if (curReferenceCount < minReferenceCount) {
++        minReferenceCount = curReferenceCount;
++      }
++    }
++
++    return minReferenceCount;
++  }
++
++  private boolean isExistVolumeHasFreeSpaceForBlock(final List<V> volumes,
++      long blockSize) throws IOException {
++    boolean isExist = false;
++
++    for (V v : volumes) {
++      if (v.getAvailable() >= blockSize) {
++        isExist = true;
++        break;
++      }
++    }
++
++    return isExist;
++  }
++}
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsVolumeImpl.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsVolumeImpl.java
+index bd20db9..418dc97 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsVolumeImpl.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsVolumeImpl.java
+@@ -932,5 +932,10 @@ public StorageType getStorageType() {
+   DatanodeStorage toDatanodeStorage() {
+     return new DatanodeStorage(storageID, DatanodeStorage.State.NORMAL, storageType);
+   }
++
++  @Override
++  public int getReferenceCount() {
++    return this.reference.getReferenceCount();
++  }
+ }
+ 
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/SimulatedFSDataset.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/SimulatedFSDataset.java
+index bebf371..558f414 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/SimulatedFSDataset.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/SimulatedFSDataset.java
+@@ -506,6 +506,11 @@ public BlockIterator loadBlockIterator(String bpid, String name)
+     public FsDatasetSpi getDataset() {
+       throw new UnsupportedOperationException();
+     }
++
++    @Override
++    public int getReferenceCount() {
++      return 0;
++    }
+   }
+ 
+   private final Map<String, Map<Block, BInfo>> blockMap
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestDirectoryScanner.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestDirectoryScanner.java
+index 62b2ca9..fc5723b 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestDirectoryScanner.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestDirectoryScanner.java
+@@ -613,6 +613,11 @@ public BlockIterator loadBlockIterator(String bpid, String name)
+     public FsDatasetSpi getDataset() {
+       throw new UnsupportedOperationException();
+     }
++
++    @Override
++    public int getReferenceCount() {
++      return 0;
++    }
+   }
+ 
+   private final static TestFsVolumeSpi TEST_VOLUME = new TestFsVolumeSpi();
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/extdataset/ExternalVolumeImpl.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/extdataset/ExternalVolumeImpl.java
+index b00d78f..7549f7e 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/extdataset/ExternalVolumeImpl.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/extdataset/ExternalVolumeImpl.java
+@@ -97,4 +97,9 @@ public BlockIterator loadBlockIterator(String bpid, String name)
+   public FsDatasetSpi getDataset() {
+     return null;
+   }
++
++  @Override
++  public int getReferenceCount() {
++    return 0;
++  }
+ }
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/TestReferenceCountVolumeChoosingPolicy.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/TestReferenceCountVolumeChoosingPolicy.java
+new file mode 100644
+index 0000000..ab0c9a2
+--- /dev/null
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/TestReferenceCountVolumeChoosingPolicy.java
+@@ -0,0 +1,106 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.hadoop.hdfs.server.datanode.fsdataset;
++
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATANODE_REFERENCE_COUNT_VOLUME_CHOOSING_POLICY_REFERENCE_COUNT_THRESHOLD_KEY;
++
++import java.util.ArrayList;
++import java.util.List;
++
++import org.apache.hadoop.conf.Configurable;
++import org.apache.hadoop.conf.Configuration;
++import org.apache.hadoop.util.ReflectionUtils;
++import org.junit.Assert;
++import org.junit.Test;
++import org.mockito.Mockito;
++
++public class TestReferenceCountVolumeChoosingPolicy {
++  private static final int REFERENCE_COUNT_THRESHOLD = 2;
++
++  private static void initPolicy(VolumeChoosingPolicy<FsVolumeSpi> policy) {
++    Configuration conf = new Configuration();
++    conf.setLong(
++        DFS_DATANODE_REFERENCE_COUNT_VOLUME_CHOOSING_POLICY_REFERENCE_COUNT_THRESHOLD_KEY,
++        REFERENCE_COUNT_THRESHOLD);
++    ((Configurable) policy).setConf(conf);
++  }
++
++  @Test
++  public void testReferenceCountVolumeChoosingPolicy() throws Exception {
++    @SuppressWarnings("unchecked")
++    final ReferenceCountVolumeChoosingPolicy<FsVolumeSpi> policy =
++        ReflectionUtils.newInstance(ReferenceCountVolumeChoosingPolicy.class,
++            null);
++
++    initPolicy(policy);
++    final List<FsVolumeSpi> volumes = new ArrayList<FsVolumeSpi>();
++
++    // Add two low references count volumes.
++    // First volume, with 1 reference.
++    volumes.add(Mockito.mock(FsVolumeSpi.class));
++    Mockito.when(volumes.get(0).getReferenceCount()).thenReturn(1);
++    Mockito.when(volumes.get(0).getAvailable()).thenReturn(100L);
++
++    // First volume, with 2 references.
++    volumes.add(Mockito.mock(FsVolumeSpi.class));
++    Mockito.when(volumes.get(1).getReferenceCount()).thenReturn(2);
++    Mockito.when(volumes.get(1).getAvailable()).thenReturn(100L);
++
++    // Add two high references count volumes.
++    // First volume, with 4 references.
++    volumes.add(Mockito.mock(FsVolumeSpi.class));
++    Mockito.when(volumes.get(2).getReferenceCount()).thenReturn(4);
++    Mockito.when(volumes.get(2).getAvailable()).thenReturn(100L);
++
++    // First volume, with 5 references.
++    volumes.add(Mockito.mock(FsVolumeSpi.class));
++    Mockito.when(volumes.get(3).getReferenceCount()).thenReturn(5);
++    Mockito.when(volumes.get(3).getAvailable()).thenReturn(100L);
++
++    // initPolicy(policy, 1.0f);
++    Assert.assertEquals(volumes.get(0), policy.chooseVolume(volumes, 50));
++
++    volumes.clear();
++
++    // Test when the low-references volumes has not enough available space for
++    // block
++    // First volume, with 1 reference.
++    volumes.add(Mockito.mock(FsVolumeSpi.class));
++    Mockito.when(volumes.get(0).getReferenceCount()).thenReturn(1);
++    Mockito.when(volumes.get(0).getAvailable()).thenReturn(50L);
++
++    // First volume, with 2 references.
++    volumes.add(Mockito.mock(FsVolumeSpi.class));
++    Mockito.when(volumes.get(1).getReferenceCount()).thenReturn(2);
++    Mockito.when(volumes.get(1).getAvailable()).thenReturn(50L);
++
++    // Add two high references count volumes.
++    // First volume, with 4 references.
++    volumes.add(Mockito.mock(FsVolumeSpi.class));
++    Mockito.when(volumes.get(2).getReferenceCount()).thenReturn(4);
++    Mockito.when(volumes.get(2).getAvailable()).thenReturn(200L);
++
++    // First volume, with 5 references.
++    volumes.add(Mockito.mock(FsVolumeSpi.class));
++    Mockito.when(volumes.get(3).getReferenceCount()).thenReturn(5);
++    Mockito.when(volumes.get(3).getAvailable()).thenReturn(200L);
++
++    Assert.assertEquals(volumes.get(2), policy.chooseVolume(volumes, 100));
++  }
++
++}
