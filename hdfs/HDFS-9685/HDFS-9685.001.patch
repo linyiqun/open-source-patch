@@ -1,0 +1,147 @@
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/DecommissionManager.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/DecommissionManager.java
+index 2a5d63c..55755fc 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/DecommissionManager.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/DecommissionManager.java
+@@ -36,6 +36,7 @@
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.hdfs.DFSConfigKeys;
+ import org.apache.hadoop.hdfs.protocol.DatanodeID;
++import org.apache.hadoop.hdfs.protocol.DatanodeInfo.AdminStates;
+ import org.apache.hadoop.hdfs.server.namenode.INodeId;
+ import org.apache.hadoop.hdfs.server.namenode.Namesystem;
+ import org.apache.hadoop.hdfs.util.CyclicIteration;
+@@ -212,12 +213,19 @@ public void startDecommission(DatanodeDescriptor node) {
+   @VisibleForTesting
+   public void stopDecommission(DatanodeDescriptor node) {
+     if (node.isDecommissionInProgress() || node.isDecommissioned()) {
++      AdminStates adminState = node.getAdminState();
+       // Update DN stats maintained by HeartbeatManager
+       hbManager.stopDecommission(node);
+       // Over-replicated blocks will be detected and processed when
+       // the dead node comes back and send in its full block report.
++      // The original blocks in decomNodes will be removed from
++      // neededReplications if node is decommission-in-progress.
+       if (node.isAlive()) {
+         blockManager.processOverReplicatedBlocksOnReCommission(node);
++
++        if (adminState == AdminStates.DECOMMISSION_INPROGRESS) {
++          removeNeededReplicatedBlocksInDecomNodes(node);
++        }
+       }
+       // Remove from tracking in DecommissionManager
+       pendingNodes.remove(node);
+@@ -584,4 +592,35 @@ private void processBlocksForDecomInternal(
+   void runMonitorForTest() throws ExecutionException, InterruptedException {
+     executor.submit(monitor).get();
+   }
++
++  private void removeNeededReplicatedBlocksInDecomNodes(
++      final DatanodeDescriptor datanode) {
++    final Iterator<BlockInfo> it = datanode.getBlockIterator();
++
++    while (it.hasNext()) {
++      final BlockInfo block = it.next();
++      // Remove the block from the list if it's no longer in the block map,
++      // e.g. the containing file has been deleted
++      if (blockManager.blocksMap.getStoredBlock(block) == null) {
++        LOG.trace("Removing unknown block {}", block);
++        it.remove();
++        continue;
++      }
++
++      long bcId = block.getBlockCollectionId();
++      if (bcId == INodeId.INVALID_INODE_ID) {
++        // Orphan block, will be invalidated eventually. Skip.
++        continue;
++      }
++
++      final NumberReplicas num = blockManager.countNodes(block);
++      final int liveReplicas = num.liveReplicas();
++
++      if (!blockManager.isNeededReplication(block, liveReplicas)) {
++        blockManager.neededReplications.remove(block, liveReplicas,
++            num.readOnlyReplicas(), num.decommissionedAndDecommissioning(),
++            blockManager.getExpectedReplicaNum(block));
++      }
++    }
++  }
+ }
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestDecommission.java hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestDecommission.java
+index edc81ae..f73f78e 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestDecommission.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestDecommission.java
+@@ -1335,4 +1335,74 @@ public void testUsedCapacity() throws Exception {
+     assertTrue("BlockPoolUsed should not be the same after a node has " +
+         "been decommissioned!",initialBlockPoolUsed != newBlockPoolUsed);
+   }
++
++  @Test
++  public void testDecommissionRemovingNeededReplicatedBlocks()
++      throws IOException, InterruptedException {
++    int underReplicatedBlocksNum;
++    int neededReplicatedBlocksNum;
++    int sleepIntervalTime = 5000;
++    int numNamenodes = 1;
++    int numDatanodes = 2;
++    // Set replications num equal to datanode's num
++    // So the blocks's num of each node is actually the file blocks's num
++    int replicas = numDatanodes;
++    conf.setInt(DFSConfigKeys.DFS_REPLICATION_KEY, replicas);
++    startCluster(numNamenodes, numDatanodes, conf);
++
++    ArrayList<ArrayList<DatanodeInfo>> namenodeDecomList =
++        new ArrayList<ArrayList<DatanodeInfo>>(numNamenodes);
++    for (int i = 0; i < numNamenodes; i++) {
++      namenodeDecomList.add(i, new ArrayList<DatanodeInfo>(numDatanodes));
++    }
++
++    // Calculate total blocks num of file
++    neededReplicatedBlocksNum = (int) Math.ceil(1.0 * fileSize / blockSize);
++    Path file = new Path("testDecommission.dat");
++    for (int iteration = 0; iteration < numDatanodes - 1; iteration++) {
++      // Start decommissioning one namenode
++      for (int i = 0; i < numNamenodes; i++) {
++        FileSystem fileSys = cluster.getFileSystem(i);
++        FSNamesystem ns = cluster.getNamesystem(i);
++        BlockManager blcokManager = ns.getBlockManager();
++
++        writeFile(fileSys, file, replicas);
++
++        DFSClient client = getDfsClient(cluster.getNameNode(i), conf);
++        DatanodeInfo[] info = client.datanodeReport(DatanodeReportType.LIVE);
++
++        ArrayList<String> decommissionedNodes = new ArrayList<String>();
++        decommissionedNodes.add(info[0].getXferAddr());
++        writeConfigFile(excludeFile, decommissionedNodes);
++        refreshNodes(cluster.getNamesystem(i), conf);
++        // Return the datanode descriptor for the given datanode.
++        NameNodeAdapter.getDatanode(cluster.getNamesystem(i), info[0]);
++
++        // Sleep some time to let DecommissionManager Monitor thread to scan the
++        // blocks
++        Thread.sleep(sleepIntervalTime);
++        underReplicatedBlocksNum =
++            blcokManager.getUnderReplicatedNotMissingBlocks();
++        assertEquals(neededReplicatedBlocksNum, underReplicatedBlocksNum);
++
++        // Remove decommissionedNodes from exclude file
++        // The blocks of neededReplications will be removed
++        decommissionedNodes.clear();
++        writeConfigFile(excludeFile, decommissionedNodes);
++        refreshNodes(cluster.getNamesystem(i), conf);
++
++        underReplicatedBlocksNum =
++            blcokManager.getUnderReplicatedNotMissingBlocks();
++        assertEquals(0, underReplicatedBlocksNum);
++
++        cleanupFile(fileSys, file);
++      }
++    }
++
++    // Restart the cluster and ensure decommissioned datanodes
++    // are allowed to register with the namenode
++    cluster.shutdown();
++    startCluster(numNamenodes, numDatanodes, conf);
++    cluster.shutdown();
++  }
+ }
