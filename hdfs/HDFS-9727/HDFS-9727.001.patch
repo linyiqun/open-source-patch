@@ -1,0 +1,159 @@
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataXceiver.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataXceiver.java
+index 190e69c..174cb6d 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataXceiver.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataXceiver.java
+@@ -203,13 +203,13 @@ public void run() {
+         socketOut = saslStreams.out;
+       } catch (InvalidMagicNumberException imne) {
+         if (imne.isHandshake4Encryption()) {
+-          LOG.info("Failed to read expected encryption handshake from client " +
++          LOG.warn("Failed to read expected encryption handshake from client " +
+               "at " + peer.getRemoteAddressString() + ". Perhaps the client " +
+               "is running an older version of Hadoop which does not support " +
+               "encryption");
+         } else {
+-          LOG.info("Failed to read expected SASL data transfer protection " +
+-              "handshake from client at " + peer.getRemoteAddressString() + 
++          LOG.warn("Failed to read expected SASL data transfer protection " +
++              "handshake from client at " + peer.getRemoteAddressString() +
+               ". Perhaps the client is running an older version of Hadoop " +
+               "which does not support SASL data transfer protection");
+         }
+@@ -363,7 +363,7 @@ public void requestShortCircuitFds(final ExtendedBlock blk,
+       }
+     } finally {
+       if ((!success) && (registeredSlotId != null)) {
+-        LOG.info("Unregistering " + registeredSlotId + " because the " +
++        LOG.warn("Unregistering " + registeredSlotId + " because the " +
+             "requestShortCircuitFdsForRead operation failed.");
+         datanode.shortCircuitRegistry.unregisterSlot(registeredSlotId);
+       }
+@@ -443,9 +443,11 @@ public void requestShortCircuitShm(String clientName) throws IOException {
+     DomainSocket sock = peer.getDomainSocket();
+     try {
+       if (sock == null) {
+-        sendShmErrorResponse(ERROR_INVALID, "Bad request from " +
+-            peer + ": must request a shared " +
+-            "memory segment over a UNIX domain socket.");
++        String msg =
++            "Bad request from " + peer + ": must request a shared "
++                + "memory segment over a UNIX domain socket.";
++        LOG.warn(msg);
++        sendShmErrorResponse(ERROR_INVALID, msg);
+         return;
+       }
+       try {
+@@ -455,13 +457,17 @@ public void requestShortCircuitShm(String clientName) throws IOException {
+         // socket is managed by the DomainSocketWatcher, not the DataXceiver.
+         releaseSocket();
+       } catch (UnsupportedOperationException e) {
+-        sendShmErrorResponse(ERROR_UNSUPPORTED, 
+-            "This datanode has not been configured to support " +
+-            "short-circuit shared memory segments.");
++        String msg =
++            "This datanode has not been configured to support "
++                + "short-circuit shared memory segments.";
++        LOG.warn(msg);
++        sendShmErrorResponse(ERROR_UNSUPPORTED, msg);
+         return;
+       } catch (IOException e) {
+-        sendShmErrorResponse(ERROR,
+-            "Failed to create shared file descriptor: " + e.getMessage());
++        String msg =
++            "Failed to create shared file descriptor: " + e.getMessage();
++        LOG.warn(msg);
++        sendShmErrorResponse(ERROR, msg);
+         return;
+       }
+       sendShmSuccessResponse(sock, shmInfo);
+@@ -543,7 +549,7 @@ public void readBlock(final ExtendedBlock block,
+             cachingStrategy);
+       } catch(IOException e) {
+         String msg = "opReadBlock " + block + " received exception " + e; 
+-        LOG.info(msg);
++        LOG.warn(msg);
+         sendResponse(ERROR, msg);
+         throw e;
+       }
+@@ -567,7 +573,8 @@ public void readBlock(final ExtendedBlock block,
+             IOUtils.closeStream(out);
+           }
+         } catch (IOException ioe) {
+-          LOG.debug("Error reading client status response. Will close connection.", ioe);
++          LOG.warn("Error reading client status response. "
++              + "Will close connection.", ioe);
+           IOUtils.closeStream(out);
+           incrDatanodeNetworkErrors();
+         }
+@@ -780,7 +787,7 @@ public void writeBlock(final ExtendedBlock block,
+                       block + " to mirror " + mirrorNode + ": " + e);
+             throw e;
+           } else {
+-            LOG.info(datanode + ":Exception transfering " +
++            LOG.warn(datanode + ":Exception transfering " +
+                      block + " to mirror " + mirrorNode +
+                      "- continuing without the mirror", e);
+             incrDatanodeNetworkErrors();
+@@ -839,7 +846,7 @@ public void writeBlock(final ExtendedBlock block,
+         size = block.getNumBytes();
+       }
+     } catch (IOException ioe) {
+-      LOG.info("opWriteBlock " + block + " received exception " + ioe);
++      LOG.warn("opWriteBlock " + block + " received exception " + ioe);
+       incrDatanodeNetworkErrors();
+       throw ioe;
+     } finally {
+@@ -875,7 +882,7 @@ public void transferBlock(final ExtendedBlock blk,
+           targetStorageTypes, clientName);
+       writeResponse(Status.SUCCESS, null, out);
+     } catch (IOException ioe) {
+-      LOG.info("transferBlock " + blk + " received exception " + ioe);
++      LOG.warn("transferBlock " + blk + " received exception " + ioe);
+       incrDatanodeNetworkErrors();
+       throw ioe;
+     } finally {
+@@ -969,7 +976,7 @@ public void blockChecksum(final ExtendedBlock block,
+         .writeDelimitedTo(out);
+       out.flush();
+     } catch (IOException ioe) {
+-      LOG.info("blockChecksum " + block + " received exception " + ioe);
++      LOG.warn("blockChecksum " + block + " received exception " + ioe);
+       incrDatanodeNetworkErrors();
+       throw ioe;
+     } finally {
+@@ -993,7 +1000,7 @@ public void copyBlock(final ExtendedBlock block,
+     if (datanode.data.getPinning(block)) {
+       String msg = "Not able to copy block " + block.getBlockId() + " " +
+           "to " + peer.getRemoteAddressString() + " because it's pinned ";
+-      LOG.info(msg);
++      LOG.warn(msg);
+       sendResponse(ERROR, msg);
+     }
+     
+@@ -1001,7 +1008,7 @@ public void copyBlock(final ExtendedBlock block,
+       String msg = "Not able to copy block " + block.getBlockId() + " " +
+           "to " + peer.getRemoteAddressString() + " because threads " +
+           "quota is exceeded.";
+-      LOG.info(msg);
++      LOG.warn(msg);
+       sendResponse(ERROR, msg);
+       return;
+     }
+@@ -1031,7 +1038,7 @@ public void copyBlock(final ExtendedBlock block,
+       LOG.info("Copied " + block + " to " + peer.getRemoteAddressString());
+     } catch (IOException ioe) {
+       isOpSuccess = false;
+-      LOG.info("opCopyBlock " + block + " received exception " + ioe);
++      LOG.warn("opCopyBlock " + block + " received exception " + ioe);
+       incrDatanodeNetworkErrors();
+       throw ioe;
+     } finally {
+@@ -1154,7 +1161,7 @@ public void replaceBlock(final ExtendedBlock block,
+     } catch (IOException ioe) {
+       opStatus = ERROR;
+       errMsg = "opReplaceBlock " + block + " received exception " + ioe; 
+-      LOG.info(errMsg);
++      LOG.warn(errMsg);
+       if (!IoeDuringCopyBlockOperation) {
+         // Don't double count IO errors
+         incrDatanodeNetworkErrors();
