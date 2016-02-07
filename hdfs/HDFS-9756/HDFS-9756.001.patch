@@ -1,0 +1,258 @@
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSConfigKeys.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSConfigKeys.java
+index df205db..01fbfc1 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSConfigKeys.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSConfigKeys.java
+@@ -723,6 +723,9 @@
+   @Deprecated
+   public static final String DFS_DATA_TRANSFER_SASL_PROPS_RESOLVER_CLASS_KEY =
+       HdfsClientConfigKeys.DFS_DATA_TRANSFER_SASL_PROPS_RESOLVER_CLASS_KEY;
++  public static final String DFS_DATA_TRANSFER_THROTTLER_PERIOD_MS =
++      "dfs.data.transfer-throttler.period.ms";
++  public static final long DFS_DATA_TRANSFER_THROTTLER_PERIOD_MS_DEFAULT = 500;
+   public static final int    DFS_NAMENODE_LIST_ENCRYPTION_ZONES_NUM_RESPONSES_DEFAULT = 100;
+   public static final String DFS_NAMENODE_LIST_ENCRYPTION_ZONES_NUM_RESPONSES = "dfs.namenode.list.encryption.zones.num.responses";
+   public static final String DFS_ENCRYPTION_KEY_PROVIDER_URI =
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/BlockScanner.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/BlockScanner.java
+index be6aa83..716d6f1 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/BlockScanner.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/BlockScanner.java
+@@ -20,6 +20,8 @@
+ 
+ import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_BLOCK_SCANNER_VOLUME_BYTES_PER_SECOND;
+ import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_BLOCK_SCANNER_VOLUME_BYTES_PER_SECOND_DEFAULT;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATA_TRANSFER_THROTTLER_PERIOD_MS;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATA_TRANSFER_THROTTLER_PERIOD_MS_DEFAULT;
+ import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATANODE_SCAN_PERIOD_HOURS_KEY;
+ import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATANODE_SCAN_PERIOD_HOURS_DEFAULT;
+ 
+@@ -104,6 +106,7 @@
+     final long maxStalenessMs;
+     final long scanPeriodMs;
+     final long cursorSaveMs;
++    private final long dataTransferThrottlerPeriodMs;
+     final Class<? extends ScanResultHandler> resultHandler;
+ 
+     private static long getUnitTestLong(Configuration conf, String key,
+@@ -155,6 +158,9 @@ private static long getConfiguredScanPeriodMs(Configuration conf) {
+       this.cursorSaveMs = Math.max(0L, getUnitTestLong(conf,
+           INTERNAL_DFS_BLOCK_SCANNER_CURSOR_SAVE_INTERVAL_MS,
+           INTERNAL_DFS_BLOCK_SCANNER_CURSOR_SAVE_INTERVAL_MS_DEFAULT));
++      this.dataTransferThrottlerPeriodMs =
++          conf.getLong(DFS_DATA_TRANSFER_THROTTLER_PERIOD_MS,
++              DFS_DATA_TRANSFER_THROTTLER_PERIOD_MS_DEFAULT);
+       if (allowUnitTestSettings) {
+         this.resultHandler = (Class<? extends ScanResultHandler>)
+             conf.getClass(INTERNAL_VOLUME_SCANNER_SCAN_RESULT_HANDLER,
+@@ -163,6 +169,10 @@ private static long getConfiguredScanPeriodMs(Configuration conf) {
+         this.resultHandler = ScanResultHandler.class;
+       }
+     }
++
++    public long getDataTransferThrottlerPeriodMs() {
++      return dataTransferThrottlerPeriodMs;
++    }
+   }
+ 
+   public BlockScanner(DataNode datanode, Configuration conf) {
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataXceiverServer.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataXceiverServer.java
+index 36cf8a1..cc98bd5 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataXceiverServer.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataXceiverServer.java
+@@ -35,6 +35,13 @@
+ 
+ import org.slf4j.Logger;
+ 
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATA_TRANSFER_THROTTLER_PERIOD_MS;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATA_TRANSFER_THROTTLER_PERIOD_MS_DEFAULT;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATANODE_BALANCE_BANDWIDTHPERSEC_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATANODE_BALANCE_BANDWIDTHPERSEC_DEFAULT;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATANODE_BALANCE_MAX_NUM_CONCURRENT_MOVES_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATANODE_BALANCE_MAX_NUM_CONCURRENT_MOVES_DEFAULT;
++
+ /**
+  * Server used for receiving/sending a block of data.
+  * This is created to listen for requests from clients or 
+@@ -72,8 +79,8 @@
+     * 
+     * @param bandwidth Total amount of bandwidth can be used for balancing 
+     */
+-    private BlockBalanceThrottler(long bandwidth, int maxThreads) {
+-      super(bandwidth);
++    private BlockBalanceThrottler(long period, long bandwidth, int maxThreads) {
++      super(period, bandwidth);
+       this.maxThreads.set(maxThreads);
+       LOG.info("Balancing bandwith is " + bandwidth + " bytes/s");
+       LOG.info("Number threads for balancing is " + maxThreads);
+@@ -131,10 +138,12 @@ synchronized void release() {
+     
+     //set up parameter for cluster balancing
+     this.balanceThrottler = new BlockBalanceThrottler(
+-        conf.getLong(DFSConfigKeys.DFS_DATANODE_BALANCE_BANDWIDTHPERSEC_KEY,
+-            DFSConfigKeys.DFS_DATANODE_BALANCE_BANDWIDTHPERSEC_DEFAULT),
+-        conf.getInt(DFSConfigKeys.DFS_DATANODE_BALANCE_MAX_NUM_CONCURRENT_MOVES_KEY,
+-            DFSConfigKeys.DFS_DATANODE_BALANCE_MAX_NUM_CONCURRENT_MOVES_DEFAULT));
++        conf.getLong(DFS_DATA_TRANSFER_THROTTLER_PERIOD_MS,
++            DFS_DATA_TRANSFER_THROTTLER_PERIOD_MS_DEFAULT),
++        conf.getLong(DFS_DATANODE_BALANCE_BANDWIDTHPERSEC_KEY,
++            DFS_DATANODE_BALANCE_BANDWIDTHPERSEC_DEFAULT),
++        conf.getInt(DFS_DATANODE_BALANCE_MAX_NUM_CONCURRENT_MOVES_KEY,
++            DFS_DATANODE_BALANCE_MAX_NUM_CONCURRENT_MOVES_DEFAULT));
+   }
+ 
+   @Override
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/VolumeScanner.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/VolumeScanner.java
+index d1f2d05..38917c3 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/VolumeScanner.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/VolumeScanner.java
+@@ -103,7 +103,7 @@
+   /**
+    * The throttler to use with BlockSender objects.
+    */
+-  private final DataTransferThrottler throttler = new DataTransferThrottler(1);
++  private DataTransferThrottler throttler;
+ 
+   /**
+    * The null output stream to use with BlockSender objects.
+@@ -304,6 +304,8 @@ public void handle(ExtendedBlock block, IOException e) {
+       handler = new ScanResultHandler();
+     }
+     this.resultHandler = handler;
++    throttler =
++        new DataTransferThrottler(conf.getDataTransferThrottlerPeriodMs(), 1);
+     setName("VolumeScannerThread(" + volume.getBasePath() + ")");
+     setDaemon(true);
+   }
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/ImageServlet.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/ImageServlet.java
+index 4e4028d..e24350c 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/ImageServlet.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/ImageServlet.java
+@@ -222,9 +222,12 @@ public static DataTransferThrottler getThrottler(Configuration conf) {
+     long transferBandwidth =
+       conf.getLong(DFSConfigKeys.DFS_IMAGE_TRANSFER_RATE_KEY,
+                    DFSConfigKeys.DFS_IMAGE_TRANSFER_RATE_DEFAULT);
++    long transferPeriod =
++        conf.getLong(DFSConfigKeys.DFS_DATA_TRANSFER_THROTTLER_PERIOD_MS,
++            DFSConfigKeys.DFS_DATA_TRANSFER_THROTTLER_PERIOD_MS_DEFAULT);
+     DataTransferThrottler throttler = null;
+     if (transferBandwidth > 0) {
+-      throttler = new DataTransferThrottler(transferBandwidth);
++      throttler = new DataTransferThrottler(transferPeriod, transferBandwidth);
+     }
+     return throttler;
+   }
+@@ -235,9 +238,12 @@ private static DataTransferThrottler getThrottlerForBootstrapStandby(
+         conf.getLong(
+             DFSConfigKeys.DFS_IMAGE_TRANSFER_BOOTSTRAP_STANDBY_RATE_KEY,
+             DFSConfigKeys.DFS_IMAGE_TRANSFER_BOOTSTRAP_STANDBY_RATE_DEFAULT);
++    long transferPeriod =
++        conf.getLong(DFSConfigKeys.DFS_DATA_TRANSFER_THROTTLER_PERIOD_MS,
++            DFSConfigKeys.DFS_DATA_TRANSFER_THROTTLER_PERIOD_MS_DEFAULT);
+     DataTransferThrottler throttler = null;
+     if (transferBandwidth > 0) {
+-      throttler = new DataTransferThrottler(transferBandwidth);
++      throttler = new DataTransferThrottler(transferPeriod, transferBandwidth);
+     }
+     return throttler;
+   }
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/util/DataTransferThrottler.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/util/DataTransferThrottler.java
+index b9bba0d..cc759ed 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/util/DataTransferThrottler.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/util/DataTransferThrottler.java
+@@ -33,13 +33,6 @@
+   private long curReserve;      // remaining bytes can be sent in the period
+   private long bytesAlreadyUsed;
+ 
+-  /** Constructor 
+-   * @param bandwidthPerSec bandwidth allowed in bytes per second. 
+-   */
+-  public DataTransferThrottler(long bandwidthPerSec) {
+-    this(500, bandwidthPerSec);  // by default throttling period is 500ms 
+-  }
+-
+   /**
+    * Constructor
+    * @param period in milliseconds. Bandwidth is enforced over this
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/resources/hdfs-default.xml hadoop-hdfs-project/hadoop-hdfs/src/main/resources/hdfs-default.xml
+index 4889bc3..2b654c8 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/resources/hdfs-default.xml
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/resources/hdfs-default.xml
+@@ -2762,4 +2762,15 @@
+   </description>
+ </property>
+ 
++<property>
++  <name>dfs.data.transfer-throttler.period.ms</name>
++  <value>500</value>
++  <description>
++    The period of time which bandwith is imposed in data-transfering.
++    If this value set small, the number of times to waitting for
++    next period will be increased. And the average bandwidth will be
++    decreased. This property will be also throttle the data transfers.
++  </description>
++</property>
++
+ </configuration>
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestBlockReplacement.java hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestBlockReplacement.java
+index bfd02e2..7476de6 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestBlockReplacement.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestBlockReplacement.java
+@@ -72,28 +72,50 @@
+   "org.apache.hadoop.hdfs.TestBlockReplacement");
+ 
+   MiniDFSCluster cluster;
++
+   @Test
+   public void testThrottler() throws IOException {
+     Configuration conf = new HdfsConfiguration();
+     FileSystem.setDefaultUri(conf, "hdfs://localhost:0");
+-    long bandwidthPerSec = 1024*1024L;
+-    final long TOTAL_BYTES =6*bandwidthPerSec; 
+-    long bytesToSend = TOTAL_BYTES; 
++    long bandwidthPerSec = 1024 * 1024L;
++    final long TOTAL_BYTES = 6 * bandwidthPerSec;
++
++    long transferThrottlerPeriod = 200;
++    long bandwidth1 =
++        getBandwidth(TOTAL_BYTES, transferThrottlerPeriod, bandwidthPerSec);
++    assertTrue(bandwidth1 <= bandwidthPerSec);
++
++    transferThrottlerPeriod = 500;
++    long bandwidth2 =
++        getBandwidth(TOTAL_BYTES, transferThrottlerPeriod, bandwidthPerSec);
++    assertTrue(bandwidth2 <= bandwidthPerSec);
++
++    assertTrue(bandwidth1 <= bandwidth2);
++  }
++
++  private long getBandwidth(long totalBytes, long transferThrottlerPeriod,
++      long bandwidthPerSec) {
++    long bandwidth;
++    long bytesToSend = totalBytes;
+     long start = Time.monotonicNow();
+-    DataTransferThrottler throttler = new DataTransferThrottler(bandwidthPerSec);
+-    long totalBytes = 0L;
+-    long bytesSent = 1024*512L; // 0.5MB
++
++    DataTransferThrottler throttler =
++        new DataTransferThrottler(transferThrottlerPeriod, bandwidthPerSec);
++    long bytesSent = 1024 * 512L; // 0.5MB
+     throttler.throttle(bytesSent);
+     bytesToSend -= bytesSent;
+-    bytesSent = 1024*768L; // 0.75MB
++    bytesSent = 1024 * 768L; // 0.75MB
+     throttler.throttle(bytesSent);
+     bytesToSend -= bytesSent;
+     try {
+       Thread.sleep(1000);
+-    } catch (InterruptedException ignored) {}
++    } catch (InterruptedException ignored) {
++    }
+     throttler.throttle(bytesToSend);
+     long end = Time.monotonicNow();
+-    assertTrue(totalBytes*1000/(end-start)<=bandwidthPerSec);
++
++    bandwidth = totalBytes * 1000 / (end - start);
++    return bandwidth;
+   }
+   
+   @Test
