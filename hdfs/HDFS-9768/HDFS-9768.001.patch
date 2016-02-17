@@ -1,0 +1,219 @@
+diff --git hadoop-hdfs-project/hadoop-hdfs-client/src/main/java/org/apache/hadoop/hdfs/web/oauth2/ConfRefreshTokenBasedAccessTokenProvider.java hadoop-hdfs-project/hadoop-hdfs-client/src/main/java/org/apache/hadoop/hdfs/web/oauth2/ConfRefreshTokenBasedAccessTokenProvider.java
+index 773eeae..2d62d10 100644
+--- hadoop-hdfs-project/hadoop-hdfs-client/src/main/java/org/apache/hadoop/hdfs/web/oauth2/ConfRefreshTokenBasedAccessTokenProvider.java
++++ hadoop-hdfs-project/hadoop-hdfs-client/src/main/java/org/apache/hadoop/hdfs/web/oauth2/ConfRefreshTokenBasedAccessTokenProvider.java
+@@ -29,6 +29,7 @@
+ import org.apache.hadoop.util.Timer;
+ import org.apache.http.HttpStatus;
+ import org.codehaus.jackson.map.ObjectMapper;
++import org.codehaus.jackson.map.ObjectReader;
+ 
+ import java.io.IOException;
+ import java.util.Map;
+@@ -54,6 +55,8 @@
+ @InterfaceStability.Evolving
+ public class ConfRefreshTokenBasedAccessTokenProvider
+     extends AccessTokenProvider {
++  private static final ObjectReader READER =
++      new ObjectMapper().reader(Map.class);
+ 
+   public static final String OAUTH_REFRESH_TOKEN_KEY
+       = "dfs.webhdfs.oauth2.refresh.token";
+@@ -126,10 +129,7 @@ void refresh() throws IOException {
+             + responseBody.code() + ", text = " + responseBody.toString());
+       }
+ 
+-      ObjectMapper mapper = new ObjectMapper();
+-      Map<?, ?> response = mapper.reader(Map.class)
+-          .readValue(responseBody.body().string());
+-
++      Map<?, ?> response = READER.readValue(responseBody.body().string());
+ 
+       String newExpiresIn = response.get(EXPIRES_IN).toString();
+       accessTokenTimer.setExpiresIn(newExpiresIn);
+diff --git hadoop-hdfs-project/hadoop-hdfs-client/src/main/java/org/apache/hadoop/hdfs/web/oauth2/CredentialBasedAccessTokenProvider.java hadoop-hdfs-project/hadoop-hdfs-client/src/main/java/org/apache/hadoop/hdfs/web/oauth2/CredentialBasedAccessTokenProvider.java
+index 15cda88..0d9006e 100644
+--- hadoop-hdfs-project/hadoop-hdfs-client/src/main/java/org/apache/hadoop/hdfs/web/oauth2/CredentialBasedAccessTokenProvider.java
++++ hadoop-hdfs-project/hadoop-hdfs-client/src/main/java/org/apache/hadoop/hdfs/web/oauth2/CredentialBasedAccessTokenProvider.java
+@@ -29,6 +29,7 @@
+ import org.apache.hadoop.util.Timer;
+ import org.apache.http.HttpStatus;
+ import org.codehaus.jackson.map.ObjectMapper;
++import org.codehaus.jackson.map.ObjectReader;
+ 
+ import java.io.IOException;
+ import java.util.Map;
+@@ -54,6 +55,9 @@
+ @InterfaceStability.Evolving
+ public abstract class CredentialBasedAccessTokenProvider
+     extends AccessTokenProvider {
++  private static final ObjectReader READER =
++      new ObjectMapper().reader(Map.class);
++
+   public static final String OAUTH_CREDENTIAL_KEY
+       = "dfs.webhdfs.oauth2.credential";
+ 
+@@ -119,9 +123,7 @@ void refresh() throws IOException {
+             + responseBody.code() + ", text = " + responseBody.toString());
+       }
+ 
+-      ObjectMapper mapper = new ObjectMapper();
+-      Map<?, ?> response = mapper.reader(Map.class)
+-          .readValue(responseBody.body().string());
++      Map<?, ?> response = READER.readValue(responseBody.body().string());
+ 
+       String newExpiresIn = response.get(EXPIRES_IN).toString();
+       timer.setExpiresIn(newExpiresIn);
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsVolumeImpl.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsVolumeImpl.java
+index 86f03c2..1533a32 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsVolumeImpl.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsVolumeImpl.java
+@@ -62,6 +62,8 @@
+ import org.apache.hadoop.util.Timer;
+ import org.codehaus.jackson.annotate.JsonProperty;
+ import org.codehaus.jackson.map.ObjectMapper;
++import org.codehaus.jackson.map.ObjectReader;
++import org.codehaus.jackson.map.ObjectWriter;
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+ 
+@@ -80,6 +82,10 @@
+ public class FsVolumeImpl implements FsVolumeSpi {
+   public static final Logger LOG =
+       LoggerFactory.getLogger(FsVolumeImpl.class);
++  private static final ObjectWriter WRITER =
++      new ObjectMapper().writerWithDefaultPrettyPrinter();
++  private static final ObjectReader READER =
++      new ObjectMapper().reader(BlockIteratorState.class);
+ 
+   private final FsDatasetImpl dataset;
+   private final String storageID;
+@@ -708,10 +714,9 @@ public void rewind() {
+     public void save() throws IOException {
+       state.lastSavedMs = Time.now();
+       boolean success = false;
+-      ObjectMapper mapper = new ObjectMapper();
+       try (BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(
+                 new FileOutputStream(getTempSaveFile(), false), "UTF-8"))) {
+-        mapper.writerWithDefaultPrettyPrinter().writeValue(writer, state);
++        WRITER.writeValue(writer, state);
+         success = true;
+       } finally {
+         if (!success) {
+@@ -725,17 +730,16 @@ public void save() throws IOException {
+           StandardCopyOption.ATOMIC_MOVE);
+       if (LOG.isTraceEnabled()) {
+         LOG.trace("save({}, {}): saved {}", storageID, bpid,
+-            mapper.writerWithDefaultPrettyPrinter().writeValueAsString(state));
++            WRITER.writeValueAsString(state));
+       }
+     }
+ 
+     public void load() throws IOException {
+-      ObjectMapper mapper = new ObjectMapper();
+       File file = getSaveFile();
+-      this.state = mapper.reader(BlockIteratorState.class).readValue(file);
++      this.state = READER.readValue(file);
+       LOG.trace("load({}, {}): loaded iterator {} from {}: {}", storageID,
+           bpid, name, file.getAbsoluteFile(),
+-          mapper.writerWithDefaultPrettyPrinter().writeValueAsString(state));
++          WRITER.writeValueAsString(state));
+     }
+ 
+     File getSaveFile() {
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
+index 0387c32..c3a0058 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
+@@ -248,6 +248,7 @@
+ import org.apache.hadoop.hdfs.server.protocol.StorageReceivedDeletedBlocks;
+ import org.apache.hadoop.hdfs.server.protocol.StorageReport;
+ import org.apache.hadoop.hdfs.server.protocol.VolumeFailureSummary;
++import org.apache.hadoop.hdfs.web.JsonUtil;
+ import org.apache.hadoop.io.IOUtils;
+ import org.apache.hadoop.io.Text;
+ import org.apache.hadoop.ipc.CallerContext;
+@@ -275,7 +276,6 @@
+ import org.apache.log4j.Appender;
+ import org.apache.log4j.AsyncAppender;
+ import org.apache.log4j.Logger;
+-import org.codehaus.jackson.map.ObjectMapper;
+ import org.mortbay.util.ajax.JSON;
+ 
+ import com.google.common.annotations.VisibleForTesting;
+@@ -4557,9 +4557,8 @@ public String getTopUserOpCounts() {
+     Map<String, Object> topMap = new TreeMap<String, Object>();
+     topMap.put("windows", topWindows);
+     topMap.put("timestamp", DFSUtil.dateToIso8601String(now));
+-    ObjectMapper mapper = new ObjectMapper();
+     try {
+-      return mapper.writeValueAsString(topMap);
++      return JsonUtil.toJsonString(topMap);
+     } catch (IOException e) {
+       LOG.warn("Failed to fetch TopUser metrics", e);
+     }
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/offlineImageViewer/FSImageLoader.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/offlineImageViewer/FSImageLoader.java
+index 172f599..21e9d2e 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/offlineImageViewer/FSImageLoader.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/offlineImageViewer/FSImageLoader.java
+@@ -54,7 +54,6 @@
+ import org.apache.hadoop.hdfs.web.resources.XAttrEncodingParam;
+ import org.apache.hadoop.io.IOUtils;
+ import org.apache.hadoop.util.LimitInputStream;
+-import org.codehaus.jackson.map.ObjectMapper;
+ 
+ import com.google.common.base.Preconditions;
+ import com.google.common.collect.Lists;
+@@ -263,10 +262,9 @@ public int compare(FsImageProto.FileSummary.Section s1,
+    * @throws IOException if failed to serialize fileStatus to JSON.
+    */
+   String getFileStatus(String path) throws IOException {
+-    ObjectMapper mapper = new ObjectMapper();
+     FsImageProto.INodeSection.INode inode = fromINodeId(lookup(path));
+     return "{\"FileStatus\":\n"
+-        + mapper.writeValueAsString(getFileStatus(inode, false)) + "\n}\n";
++        + JsonUtil.toJsonString(getFileStatus(inode, false)) + "\n}\n";
+   }
+ 
+   /**
+@@ -277,7 +275,6 @@ String getFileStatus(String path) throws IOException {
+    */
+   String listStatus(String path) throws IOException {
+     StringBuilder sb = new StringBuilder();
+-    ObjectMapper mapper = new ObjectMapper();
+     List<Map<String, Object>> fileStatusList = getFileStatusList(path);
+     sb.append("{\"FileStatuses\":{\"FileStatus\":[\n");
+     int i = 0;
+@@ -285,7 +282,7 @@ String listStatus(String path) throws IOException {
+       if (i++ != 0) {
+         sb.append(',');
+       }
+-      sb.append(mapper.writeValueAsString(fileStatusMap));
++      sb.append(JsonUtil.toJsonString(fileStatusMap));
+     }
+     sb.append("\n]}}\n");
+     return sb.toString();
+@@ -318,9 +315,8 @@ String listStatus(String path) throws IOException {
+    * @throws IOException if failed to serialize ContentSummary to JSON.
+    */
+   String getContentSummary(String path) throws IOException {
+-    ObjectMapper mapper = new ObjectMapper();
+     return "{\"ContentSummary\":\n"
+-        + mapper.writeValueAsString(getContentSummaryMap(path)) + "\n}\n";
++        + JsonUtil.toJsonString(getContentSummaryMap(path)) + "\n}\n";
+   }
+ 
+   private Map<String, Object> getContentSummaryMap(String path)
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/web/JsonUtil.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/web/JsonUtil.java
+index 342f719..368e879 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/web/JsonUtil.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/web/JsonUtil.java
+@@ -389,4 +389,8 @@ public static String toJsonString(final List<XAttr> xAttrs)
+     return MAPPER.writeValueAsString(finalMap);
+   }
+ 
++  public static String toJsonString(Object obj) throws IOException {
++    return MAPPER.writeValueAsString(obj);
++  }
++
+ }
