@@ -1,0 +1,63 @@
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/jobhistory/JobHistoryEventHandler.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/jobhistory/JobHistoryEventHandler.java
+index 63e3333..5690743 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/jobhistory/JobHistoryEventHandler.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/jobhistory/JobHistoryEventHandler.java
+@@ -73,6 +73,7 @@
+ import org.codehaus.jackson.JsonNode;
+ import org.codehaus.jackson.map.ObjectMapper;
+ import org.codehaus.jackson.node.ArrayNode;
++import org.codehaus.jackson.node.JsonNodeFactory;
+ import org.codehaus.jackson.node.ObjectNode;
+ 
+ import com.google.common.annotations.VisibleForTesting;
+@@ -84,6 +85,8 @@
+  */
+ public class JobHistoryEventHandler extends AbstractService
+     implements EventHandler<JobHistoryEvent> {
++  private static final JsonNodeFactory FACTORY =
++      new ObjectMapper().getNodeFactory();
+ 
+   private final AppContext context;
+   private final int startCount;
+@@ -1040,8 +1043,7 @@ private void processEventForTimelineServer(HistoryEvent event, JobId jobId,
+ 
+   @Private
+   public JsonNode countersToJSON(Counters counters) {
+-    ObjectMapper mapper = new ObjectMapper();
+-    ArrayNode nodes = mapper.createArrayNode();
++    ArrayNode nodes = FACTORY.arrayNode();
+     if (counters != null) {
+       for (CounterGroup counterGroup : counters) {
+         ObjectNode groupNode = nodes.addObject();
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapreduce/JobSubmitter.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapreduce/JobSubmitter.java
+index a458e2c..18b76a1 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapreduce/JobSubmitter.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapreduce/JobSubmitter.java
+@@ -63,6 +63,7 @@
+ import org.codehaus.jackson.JsonParseException;
+ import org.codehaus.jackson.map.JsonMappingException;
+ import org.codehaus.jackson.map.ObjectMapper;
++import org.codehaus.jackson.map.ObjectReader;
+ 
+ import com.google.common.base.Charsets;
+ 
+@@ -70,6 +71,8 @@
+ @InterfaceStability.Unstable
+ class JobSubmitter {
+   protected static final Log LOG = LogFactory.getLog(JobSubmitter.class);
++  private static final ObjectReader READER =
++      new ObjectMapper().reader(Map.class);
+   private static final String SHUFFLE_KEYGEN_ALGORITHM = "HmacSHA1";
+   private static final int SHUFFLE_KEY_LENGTH = 64;
+   private FileSystem jtFs;
+@@ -396,9 +399,7 @@ private void readTokensFromFiles(Configuration conf, Credentials credentials)
+       boolean json_error = false;
+       try {
+         // read JSON
+-        ObjectMapper mapper = new ObjectMapper();
+-        Map<String, String> nm = 
+-          mapper.readValue(new File(localFileName), Map.class);
++        Map<String, String> nm = READER.readValue(new File(localFileName));
+ 
+         for(Map.Entry<String, String> ent: nm.entrySet()) {
+           credentials.addSecretKey(new Text(ent.getKey()), ent.getValue()
