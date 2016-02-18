@@ -1,0 +1,47 @@
+diff --git hadoop-hdfs-project/hadoop-hdfs-client/src/main/java/org/apache/hadoop/hdfs/DFSOutputStream.java hadoop-hdfs-project/hadoop-hdfs-client/src/main/java/org/apache/hadoop/hdfs/DFSOutputStream.java
+old mode 100755
+new mode 100644
+index 1c58b28..ecbbd5e
+--- hadoop-hdfs-project/hadoop-hdfs-client/src/main/java/org/apache/hadoop/hdfs/DFSOutputStream.java
++++ hadoop-hdfs-project/hadoop-hdfs-client/src/main/java/org/apache/hadoop/hdfs/DFSOutputStream.java
+@@ -757,20 +757,30 @@ protected synchronized void closeImpl() throws IOException {
+     }
+ 
+     try {
+-      flushBuffer();       // flush from all upper layers
++      ExtendedBlock lastBlock = null;
++      try {
+ 
+-      if (currentPacket != null) {
+-        enqueueCurrentPacket();
+-      }
++        flushBuffer(); // flush from all upper layers
++
++        if (currentPacket != null) {
++          enqueueCurrentPacket();
++        }
++
++        if (getStreamer().getBytesCurBlock() != 0) {
++          setCurrentPacketToEmpty();
++        }
+ 
+-      if (getStreamer().getBytesCurBlock() != 0) {
+-        setCurrentPacketToEmpty();
++        flushInternal(); // flush all data to Datanodes
++        // get last block before destroying the streamer
++        // If exception happened before, the last block will be null
++        lastBlock = getStreamer().getBlock();
++      } finally {
++        // Failures may happen when flushing data.
++        // Streamers may keep waiting for the new block information.
++        // Thus need to force closing these threads.
++        closeThreads(true);
+       }
+ 
+-      flushInternal();             // flush all data to Datanodes
+-      // get last block before destroying the streamer
+-      ExtendedBlock lastBlock = getStreamer().getBlock();
+-      closeThreads(false);
+       try (TraceScope ignored =
+                dfsClient.getTracer().newScope("completeFile")) {
+         completeFile(lastBlock);
