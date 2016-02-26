@@ -1,0 +1,54 @@
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/erasurecode/ErasureCodingWorker.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/erasurecode/ErasureCodingWorker.java
+index 60c8417..4c9e793 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/erasurecode/ErasureCodingWorker.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/erasurecode/ErasureCodingWorker.java
+@@ -258,7 +258,7 @@ public void processErasureCodingTasks(
+     private final byte[] liveIndices;
+     private final DatanodeInfo[] sources;
+ 
+-    private final List<StripedReader> stripedReaders;
++    private List<StripedReader> stripedReaders;
+ 
+     // The buffers and indices for striped blocks whose length is 0
+     private ByteBuffer[] zeroStripeBuffers;
+@@ -269,11 +269,11 @@ public void processErasureCodingTasks(
+     private final StorageType[] targetStorageTypes;
+ 
+     private final short[] targetIndices;
+-    private final ByteBuffer[] targetBuffers;
++    private ByteBuffer[] targetBuffers;
+ 
+-    private final Socket[] targetSockets;
+-    private final DataOutputStream[] targetOutputStreams;
+-    private final DataInputStream[] targetInputStreams;
++    private Socket[] targetSockets;
++    private DataOutputStream[] targetOutputStreams;
++    private DataInputStream[] targetInputStreams;
+ 
+     private final long[] blockOffset4Targets;
+     private final long[] seqNo4Targets;
+@@ -479,6 +479,12 @@ public void run() {
+         LOG.warn("Failed to reconstruct striped block: " + blockGroup, e);
+       } finally {
+         datanode.decrementXmitsInProgress();
++        // When transfer data failed in step3, the buffers will not
++        // be cleared completely
++        clearBuffers();
++        zeroStripeBuffers = null;
++        targetBuffers = null;
++
+         // close block readers
+         for (StripedReader stripedReader : stripedReaders) {
+           closeBlockReader(stripedReader.blockReader);
+@@ -488,6 +494,11 @@ public void run() {
+           IOUtils.closeStream(targetInputStreams[i]);
+           IOUtils.closeStream(targetSockets[i]);
+         }
++
++        stripedReaders = null;
++        targetOutputStreams = null;
++        targetInputStreams = null;
++        targetSockets = null;
+       }
+     }
+ 
