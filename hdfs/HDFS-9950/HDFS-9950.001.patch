@@ -1,0 +1,68 @@
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestDecommissioningStatus.java hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestDecommissioningStatus.java
+index 789ee6f..c219d1f 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestDecommissioningStatus.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestDecommissioningStatus.java
+@@ -266,19 +266,52 @@ public void testDecommissionStatus() throws Exception {
+     short replicas = numDatanodes;
+     //
+     // Decommission one node. Verify the decommission status
+-    // 
+-    Path file1 = new Path("decommission.dat");
+-    DFSTestUtil.createFile(fileSys, file1, fileSize, fileSize, blockSize,
+-        replicas, seed);
+-
+-    Path file2 = new Path("decommission1.dat");
+-    FSDataOutputStream st1 = writeIncompleteFile(fileSys, file2, replicas);
+-    for (DataNode d: cluster.getDataNodes()) {
+-      DataNodeTestUtils.triggerBlockReport(d);
+-    }
+-
++    //
++    Path file1 = null;
++    Path file2 = null;
++    FSDataOutputStream st1 = null;
+     FSNamesystem fsn = cluster.getNamesystem();
+     final DatanodeManager dm = fsn.getBlockManager().getDatanodeManager();
++
++    boolean needRetry = false;
++    for (int tries = 0; tries < 5; tries++) {
++      // If it needs retry again then cleanup file1 and file2
++      if (needRetry) {
++        st1.close();
++        cleanupFile(fileSys, file1);
++        cleanupFile(fileSys, file2);
++      }
++      needRetry = false;
++
++      file1 = new Path("decommission.dat");
++      DFSTestUtil.createFile(fileSys, file1, fileSize, fileSize, blockSize,
++          replicas, seed);
++
++      file2 = new Path("decommission1.dat");
++      st1 = writeIncompleteFile(fileSys, file2, replicas);
++
++      for (DataNode d : cluster.getDataNodes()) {
++        DataNodeTestUtils.triggerBlockReport(d);
++      }
++
++      // Wait block report completely and numBlocks will be accurate
++      Thread.sleep(3000);
++      for (DataNode d : cluster.getDataNodes()) {
++        int count = dm.getDatanode(d.getDatanodeId()).numBlocks();
++        // Each node should have 4 blocks, two for file decommission.dat
++        // and the other two for decommission.dat1
++        if (count != 4) {
++          needRetry = true;
++          break;
++        }
++      }
++
++      // If don't need retry then break out
++      if (!needRetry) {
++        break;
++      }
++    }
++
+     for (int iteration = 0; iteration < numDatanodes; iteration++) {
+       String downnode = decommissionNode(fsn, client, localFileSys, iteration);
+       dm.refreshNodes(conf);
