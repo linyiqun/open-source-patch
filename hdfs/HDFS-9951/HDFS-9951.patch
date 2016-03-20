@@ -1,0 +1,1659 @@
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/offlineImageViewer/OfflineImageReconstructor.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/offlineImageViewer/OfflineImageReconstructor.java
+index 73f4a22..5c71399 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/offlineImageViewer/OfflineImageReconstructor.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/offlineImageViewer/OfflineImageReconstructor.java
+@@ -22,6 +22,7 @@
+ import static org.apache.hadoop.hdfs.server.namenode.FSImageFormatPBINode.XATTR_NAMESPACE_OFFSET;
+ import static org.apache.hadoop.hdfs.server.namenode.FSImageFormatPBINode.XATTR_NAMESPACE_EXT_OFFSET;
+ import static org.apache.hadoop.hdfs.server.namenode.FSImageFormatPBINode.XATTR_NAMESPACE_EXT_MASK;
++import static org.apache.hadoop.hdfs.tools.offlineImageViewer.PBImageXmlWriter.*;
+ 
+ import java.io.BufferedOutputStream;
+ import java.io.File;
+@@ -434,36 +435,38 @@ public void process() throws IOException {
+       Node node = new Node();
+       loadNodeChildren(node, "NameSection fields");
+       NameSystemSection.Builder b =  NameSystemSection.newBuilder();
+-      Integer namespaceId = node.removeChildInt("namespaceId");
++      Integer namespaceId = node.removeChildInt(NAME_SECTION_NAMESPACE_ID);
+       if (namespaceId == null)  {
+         throw new IOException("<NameSection> is missing <namespaceId>");
+       }
+       b.setNamespaceId(namespaceId);
+-      Long lval = node.removeChildLong("genstampV1");
++      Long lval = node.removeChildLong(NAME_SECTION_GENSTAMPV1);
+       if (lval != null)  {
+         b.setGenstampV1(lval);
+       }
+-      lval = node.removeChildLong("genstampV2");
++      lval = node.removeChildLong(NAME_SECTION_GENSTAMPV2);
+       if (lval != null)  {
+         b.setGenstampV2(lval);
+       }
+-      lval = node.removeChildLong("genstampV1Limit");
++      lval = node.removeChildLong(NAME_SECTION_GENSTAMPV1_LIMIT);
+       if (lval != null)  {
+         b.setGenstampV1Limit(lval);
+       }
+-      lval = node.removeChildLong("lastAllocatedBlockId");
++      lval = node.removeChildLong(NAME_SECTION_LAST_ALLOCATED_BLOCK_ID);
+       if (lval != null)  {
+         b.setLastAllocatedBlockId(lval);
+       }
+-      lval = node.removeChildLong("txid");
++      lval = node.removeChildLong(NAME_SECTION_TXID);
+       if (lval != null)  {
+         b.setTransactionId(lval);
+       }
+-      lval = node.removeChildLong("rollingUpgradeStartTime");
++      lval = node.removeChildLong(
++          NAME_SECTION_ROLLING_UPGRADE_START_TIME);
+       if (lval != null)  {
+         b.setRollingUpgradeStartTime(lval);
+       }
+-      lval = node.removeChildLong("lastAllocatedStripedBlockId");
++      lval = node.removeChildLong(
++          NAME_SECTION_LAST_ALLOCATED_STRIPED_BLOCK_ID);
+       if (lval != null)  {
+         b.setLastAllocatedStripedBlockId(lval);
+       }
+@@ -486,11 +489,12 @@ public void process() throws IOException {
+       Node headerNode = new Node();
+       loadNodeChildren(headerNode, "INodeSection fields", "inode");
+       INodeSection.Builder b =  INodeSection.newBuilder();
+-      Long lval = headerNode.removeChildLong("lastInodeId");
++      Long lval = headerNode.removeChildLong(INODE_SECTION_LAST_INODE_ID);
+       if (lval != null)  {
+         b.setLastInodeId(lval);
+       }
+-      Integer expectedNumINodes = headerNode.removeChildInt("numInodes");
++      Integer expectedNumINodes =
++          headerNode.removeChildInt(INODE_SECTION_NUM_INODES);
+       if (expectedNumINodes == null) {
+         throw new IOException("Failed to find <numInodes> in INodeSection.");
+       }
+@@ -501,7 +505,7 @@ public void process() throws IOException {
+       int actualNumINodes = 0;
+       while (actualNumINodes < expectedNumINodes) {
+         try {
+-          expectTag("inode", false);
++          expectTag(INODE_SECTION_INODE, false);
+         } catch (IOException e) {
+           throw new IOException("Only found " + actualNumINodes +
+               " <inode> entries out of " + expectedNumINodes, e);
+@@ -512,24 +516,24 @@ public void process() throws IOException {
+         INodeSection.INode.Builder inodeBld = processINodeXml(inode);
+         inodeBld.build().writeDelimitedTo(out);
+       }
+-      expectTagEnd("INodeSection");
++      expectTagEnd(INODE_SECTION_NAME);
+       recordSectionLength(SectionName.INODE.name());
+     }
+   }
+ 
+   private INodeSection.INode.Builder processINodeXml(Node node)
+       throws IOException {
+-    String type = node.removeChildStr("type");
++    String type = node.removeChildStr(INODE_SECTION_TYPE);
+     if (type == null) {
+       throw new IOException("INode XML found with no <type> tag.");
+     }
+     INodeSection.INode.Builder inodeBld = INodeSection.INode.newBuilder();
+-    Long id = node.removeChildLong("id");
++    Long id = node.removeChildLong(SECTION_ID);
+     if (id == null) {
+       throw new IOException("<inode> found without <id>");
+     }
+     inodeBld.setId(id);
+-    String name = node.removeChildStr("name");
++    String name = node.removeChildStr(SECTION_NAME);
+     if (name != null) {
+       inodeBld.setName(ByteString.copyFrom(name, "UTF8"));
+     }
+@@ -555,46 +559,46 @@ private void processFileXml(Node node, INodeSection.INode.Builder inodeBld)
+       throws IOException {
+     inodeBld.setType(INodeSection.INode.Type.FILE);
+     INodeSection.INodeFile.Builder bld = INodeSection.INodeFile.newBuilder();
+-    Integer ival = node.removeChildInt("replication");
++    Integer ival = node.removeChildInt(SECTION_REPLICATION);
+     if (ival != null) {
+       bld.setReplication(ival);
+     }
+-    Long lval = node.removeChildLong("mtime");
++    Long lval = node.removeChildLong(INODE_SECTION_MTIME);
+     if (lval != null) {
+       bld.setModificationTime(lval);
+     }
+-    lval = node.removeChildLong("atime");
++    lval = node.removeChildLong(INODE_SECTION_ATIME);
+     if (lval != null) {
+       bld.setAccessTime(lval);
+     }
+-    lval = node.removeChildLong("preferredBlockSize");
++    lval = node.removeChildLong(INODE_SECTION_PREFERRED_BLOCK_SIZE);
+     if (lval != null) {
+       bld.setPreferredBlockSize(lval);
+     }
+-    String perm = node.removeChildStr("permission");
++    String perm = node.removeChildStr(INODE_SECTION_PERMISSION);
+     if (perm != null) {
+       bld.setPermission(permissionXmlToU64(perm));
+     }
+-    Node blocks = node.removeChild("blocks");
++    Node blocks = node.removeChild(INODE_SECTION_BLOCKS);
+     if (blocks != null) {
+       while (true) {
+-        Node block = blocks.removeChild("block");
++        Node block = blocks.removeChild(INODE_SECTION_BLOCK);
+         if (block == null) {
+           break;
+         }
+         HdfsProtos.BlockProto.Builder blockBld =
+             HdfsProtos.BlockProto.newBuilder();
+-        Long id = block.removeChildLong("id");
++        Long id = block.removeChildLong(SECTION_ID);
+         if (id == null) {
+           throw new IOException("<block> found without <id>");
+         }
+         blockBld.setBlockId(id);
+-        Long genstamp = block.removeChildLong("genstamp");
++        Long genstamp = block.removeChildLong(INODE_SECTION_GEMSTAMP);
+         if (genstamp == null) {
+           throw new IOException("<block> found without <genstamp>");
+         }
+         blockBld.setGenStamp(genstamp);
+-        Long numBytes = block.removeChildLong("numBytes");
++        Long numBytes = block.removeChildLong(INODE_SECTION_NUM_BYTES);
+         if (numBytes == null) {
+           throw new IOException("<block> found without <numBytes>");
+         }
+@@ -602,19 +606,21 @@ private void processFileXml(Node node, INodeSection.INode.Builder inodeBld)
+         bld.addBlocks(blockBld);
+       }
+     }
+-    Node fileUnderConstruction = node.removeChild("file-under-construction");
++    Node fileUnderConstruction =
++        node.removeChild(INODE_SECTION_FILE_UNDER_CONSTRUCTION);
+     if (fileUnderConstruction != null) {
+       INodeSection.FileUnderConstructionFeature.Builder fb =
+           INodeSection.FileUnderConstructionFeature.newBuilder();
+       String clientName =
+-          fileUnderConstruction.removeChildStr("clientName");
++          fileUnderConstruction.removeChildStr(INODE_SECTION_CLIENT_NAME);
+       if (clientName == null) {
+         throw new IOException("<file-under-construction> found without " +
+             "<clientName>");
+       }
+       fb.setClientName(clientName);
+       String clientMachine =
+-          fileUnderConstruction.removeChildStr("clientMachine");
++          fileUnderConstruction
++                  .removeChildStr(INODE_SECTION_CLIENT_MACHINE);
+       if (clientMachine == null) {
+         throw new IOException("<file-under-construction> found without " +
+             "<clientMachine>");
+@@ -622,19 +628,19 @@ private void processFileXml(Node node, INodeSection.INode.Builder inodeBld)
+       fb.setClientMachine(clientMachine);
+       bld.setFileUC(fb);
+     }
+-    Node acls = node.removeChild("acls");
++    Node acls = node.removeChild(INODE_SECTION_ACLS);
+     if (acls != null) {
+       bld.setAcl(aclXmlToProto(acls));
+     }
+-    Node xattrs = node.removeChild("xattrs");
++    Node xattrs = node.removeChild(INODE_SECTION_XATTRS);
+     if (xattrs != null) {
+       bld.setXAttrs(xattrsXmlToProto(xattrs));
+     }
+-    ival = node.removeChildInt("storagePolicyId");
++    ival = node.removeChildInt(INODE_SECTION_STORAGE_POLICY_ID);
+     if (ival != null) {
+       bld.setStoragePolicyID(ival);
+     }
+-    Boolean bval = node.removeChildBool("isStriped");
++    Boolean bval = node.removeChildBool(INODE_SECTION_IS_STRIPED);
+     bld.setIsStriped(bval);
+     inodeBld.setFile(bld);
+     // Will check remaining keys and serialize in processINodeXml
+@@ -645,40 +651,40 @@ private void processDirectoryXml(Node node,
+     inodeBld.setType(INodeSection.INode.Type.DIRECTORY);
+     INodeSection.INodeDirectory.Builder bld =
+         INodeSection.INodeDirectory.newBuilder();
+-    Long lval = node.removeChildLong("mtime");
++    Long lval = node.removeChildLong(INODE_SECTION_MTIME);
+     if (lval != null) {
+       bld.setModificationTime(lval);
+     }
+-    lval = node.removeChildLong("nsquota");
++    lval = node.removeChildLong(INODE_SECTION_NS_QUOTA);
+     if (lval != null) {
+       bld.setNsQuota(lval);
+     }
+-    lval = node.removeChildLong("dsquota");
++    lval = node.removeChildLong(INODE_SECTION_DS_QUOTA);
+     if (lval != null) {
+       bld.setDsQuota(lval);
+     }
+-    String perm = node.removeChildStr("permission");
++    String perm = node.removeChildStr(INODE_SECTION_PERMISSION);
+     if (perm != null) {
+       bld.setPermission(permissionXmlToU64(perm));
+     }
+-    Node acls = node.removeChild("acls");
++    Node acls = node.removeChild(INODE_SECTION_ACLS);
+     if (acls != null) {
+       bld.setAcl(aclXmlToProto(acls));
+     }
+-    Node xattrs = node.removeChild("xattrs");
++    Node xattrs = node.removeChild(INODE_SECTION_XATTRS);
+     if (xattrs != null) {
+       bld.setXAttrs(xattrsXmlToProto(xattrs));
+     }
+     INodeSection.QuotaByStorageTypeFeatureProto.Builder qf =
+         INodeSection.QuotaByStorageTypeFeatureProto.newBuilder();
+     while (true) {
+-      Node typeQuota = node.removeChild("typeQuota");
++      Node typeQuota = node.removeChild(INODE_SECTION_TYPE_QUOTA);
+       if (typeQuota == null) {
+         break;
+       }
+       INodeSection.QuotaByStorageTypeEntryProto.Builder qbld =
+           INodeSection.QuotaByStorageTypeEntryProto.newBuilder();
+-      String type = typeQuota.removeChildStr("type");
++      String type = typeQuota.removeChildStr(INODE_SECTION_TYPE);
+       if (type == null) {
+         throw new IOException("<typeQuota> was missing <type>");
+       }
+@@ -688,7 +694,7 @@ private void processDirectoryXml(Node node,
+         throw new IOException("<typeQuota> had unknown <type> " + type);
+       }
+       qbld.setStorageType(storageType);
+-      Long quota = typeQuota.removeChildLong("quota");
++      Long quota = typeQuota.removeChildLong(INODE_SECTION_QUOTA);
+       if (quota == null) {
+         throw new IOException("<typeQuota> was missing <quota>");
+       }
+@@ -705,19 +711,19 @@ private void processSymlinkXml(Node node,
+     inodeBld.setType(INodeSection.INode.Type.SYMLINK);
+     INodeSection.INodeSymlink.Builder bld =
+         INodeSection.INodeSymlink.newBuilder();
+-    String perm = node.removeChildStr("permission");
++    String perm = node.removeChildStr(INODE_SECTION_PERMISSION);
+     if (perm != null) {
+       bld.setPermission(permissionXmlToU64(perm));
+     }
+-    String target = node.removeChildStr("target");
++    String target = node.removeChildStr(INODE_SECTION_TARGET);
+     if (target != null) {
+       bld.setTarget(ByteString.copyFrom(target, "UTF8"));
+     }
+-    Long lval = node.removeChildLong("mtime");
++    Long lval = node.removeChildLong(INODE_SECTION_MTIME);
+     if (lval != null) {
+       bld.setModificationTime(lval);
+     }
+-    lval = node.removeChildLong("atime");
++    lval = node.removeChildLong(INODE_SECTION_ATIME);
+     if (lval != null) {
+       bld.setAccessTime(lval);
+     }
+@@ -736,23 +742,23 @@ private void processSymlinkXml(Node node,
+     INodeSection.XAttrFeatureProto.Builder bld =
+         INodeSection.XAttrFeatureProto.newBuilder();
+     while (true) {
+-      Node xattr = xattrs.removeChild("xattr");
++      Node xattr = xattrs.removeChild(INODE_SECTION_XATTR);
+       if (xattr == null) {
+         break;
+       }
+       INodeSection.XAttrCompactProto.Builder b =
+           INodeSection.XAttrCompactProto.newBuilder();
+-      String ns = xattr.removeChildStr("ns");
++      String ns = xattr.removeChildStr(INODE_SECTION_NS);
+       if (ns == null) {
+         throw new IOException("<xattr> had no <ns> entry.");
+       }
+       int nsIdx = XAttrProtos.XAttrProto.
+           XAttrNamespaceProto.valueOf(ns).ordinal();
+-      String name = xattr.removeChildStr("name");
+-      String valStr = xattr.removeChildStr("val");
++      String name = xattr.removeChildStr(SECTION_NAME);
++      String valStr = xattr.removeChildStr(INODE_SECTION_VAL);
+       byte[] val = null;
+       if (valStr == null) {
+-        String valHex = xattr.removeChildStr("valHex");
++        String valHex = xattr.removeChildStr(INODE_SECTION_VAL_HEX);
+         if (valHex == null) {
+           throw new IOException("<xattr> had no <val> or <valHex> entry.");
+         }
+@@ -787,24 +793,28 @@ public void process() throws IOException {
+       loadNodeChildren(secretHeader, "SecretManager fields",
+           "delegationKey", "token");
+       SecretManagerSection.Builder b =  SecretManagerSection.newBuilder();
+-      Integer currentId = secretHeader.removeChildInt("currentId");
++      Integer currentId =
++          secretHeader.removeChildInt(SECRET_MANAGER_SECTION_CURRENT_ID);
+       if (currentId == null) {
+         throw new IOException("SecretManager section had no <currentId>");
+       }
+       b.setCurrentId(currentId);
+-      Integer tokenSequenceNumber = secretHeader.removeChildInt("tokenSequenceNumber");
++      Integer tokenSequenceNumber = secretHeader.removeChildInt(
++          SECRET_MANAGER_SECTION_TOKEN_SEQUENCE_NUMBER);
+       if (tokenSequenceNumber == null) {
+         throw new IOException("SecretManager section had no " +
+             "<tokenSequenceNumber>");
+       }
+       b.setTokenSequenceNumber(tokenSequenceNumber);
+-      Integer expectedNumKeys = secretHeader.removeChildInt("numDelegationKeys");
++      Integer expectedNumKeys = secretHeader.removeChildInt(
++          SECRET_MANAGER_SECTION_NUM_DELEGATION_KEYS);
+       if (expectedNumKeys == null) {
+         throw new IOException("SecretManager section had no " +
+             "<numDelegationKeys>");
+       }
+       b.setNumKeys(expectedNumKeys);
+-      Integer expectedNumTokens = secretHeader.removeChildInt("numTokens");
++      Integer expectedNumTokens =
++          secretHeader.removeChildInt(SECRET_MANAGER_SECTION_NUM_TOKENS);
+       if (expectedNumTokens == null) {
+         throw new IOException("SecretManager section had no " +
+             "<numTokens>");
+@@ -815,7 +825,7 @@ public void process() throws IOException {
+       for (int actualNumKeys = 0; actualNumKeys < expectedNumKeys;
+            actualNumKeys++) {
+         try {
+-          expectTag("delegationKey", false);
++          expectTag(SECRET_MANAGER_SECTION_DELEGATION_KEY, false);
+         } catch (IOException e) {
+           throw new IOException("Only read " + actualNumKeys +
+               " delegation keys out of " + expectedNumKeys, e);
+@@ -824,32 +834,32 @@ public void process() throws IOException {
+             SecretManagerSection.DelegationKey.newBuilder();
+         Node dkey = new Node();
+         loadNodeChildren(dkey, "Delegation key fields");
+-        Integer id = dkey.removeChildInt("id");
++        Integer id = dkey.removeChildInt(SECTION_ID);
+         if (id == null) {
+           throw new IOException("Delegation key stanza <delegationKey> " +
+               "lacked an <id> field.");
+         }
+         dbld.setId(id);
+-        String expiry = dkey.removeChildStr("expiry");
++        String expiry = dkey.removeChildStr(SECRET_MANAGER_SECTION_EXPIRY);
+         if (expiry == null) {
+           throw new IOException("Delegation key stanza <delegationKey> " +
+               "lacked an <expiry> field.");
+         }
+         dbld.setExpiryDate(dateStrToLong(expiry));
+-        String keyHex = dkey.removeChildStr("key");
++        String keyHex = dkey.removeChildStr(SECRET_MANAGER_SECTION_KEY);
+         if (keyHex == null) {
+           throw new IOException("Delegation key stanza <delegationKey> " +
+               "lacked a <key> field.");
+         }
+         byte[] key = new HexBinaryAdapter().unmarshal(keyHex);
+-        dkey.verifyNoRemainingKeys("delegationKey");
++        dkey.verifyNoRemainingKeys(SECRET_MANAGER_SECTION_DELEGATION_KEY);
+         dbld.setKey(ByteString.copyFrom(key));
+         dbld.build().writeDelimitedTo(out);
+       }
+       for (int actualNumTokens = 0; actualNumTokens < expectedNumTokens;
+            actualNumTokens++) {
+         try {
+-          expectTag("token", false);
++          expectTag(SECRET_MANAGER_SECTION_TOKEN, false);
+         } catch (IOException e) {
+           throw new IOException("Only read " + actualNumTokens +
+               " tokens out of " + expectedNumTokens, e);
+@@ -858,46 +868,54 @@ public void process() throws IOException {
+             SecretManagerSection.PersistToken.newBuilder();
+         Node token = new Node();
+         loadNodeChildren(token, "PersistToken key fields");
+-        Integer version = token.removeChildInt("version");
++        Integer version =
++            token.removeChildInt(SECRET_MANAGER_SECTION_VERSION);
+         if (version != null) {
+           tbld.setVersion(version);
+         }
+-        String owner = token.removeChildStr("owner");
++        String owner = token.removeChildStr(SECRET_MANAGER_SECTION_OWNER);
+         if (owner != null) {
+           tbld.setOwner(owner);
+         }
+-        String renewer = token.removeChildStr("renewer");
++        String renewer =
++            token.removeChildStr(SECRET_MANAGER_SECTION_RENEWER);
+         if (renewer != null) {
+           tbld.setRenewer(renewer);
+         }
+-        String realUser = token.removeChildStr("realUser");
++        String realUser =
++            token.removeChildStr(SECRET_MANAGER_SECTION_REAL_USER);
+         if (realUser != null) {
+           tbld.setRealUser(realUser);
+         }
+-        String issueDateStr = token.removeChildStr("issueDate");
++        String issueDateStr =
++            token.removeChildStr(SECRET_MANAGER_SECTION_ISSUE_DATE);
+         if (issueDateStr != null) {
+           tbld.setIssueDate(dateStrToLong(issueDateStr));
+         }
+-        String maxDateStr = token.removeChildStr("maxDate");
++        String maxDateStr =
++            token.removeChildStr(SECRET_MANAGER_SECTION_MAX_DATE);
+         if (maxDateStr != null) {
+           tbld.setMaxDate(dateStrToLong(maxDateStr));
+         }
+-        Integer seqNo = token.removeChildInt("sequenceNumber");
++        Integer seqNo =
++            token.removeChildInt(SECRET_MANAGER_SECTION_SEQUENCE_NUMBER);
+         if (seqNo != null) {
+           tbld.setSequenceNumber(seqNo);
+         }
+-        Integer masterKeyId = token.removeChildInt("masterKeyId");
++        Integer masterKeyId =
++            token.removeChildInt(SECRET_MANAGER_SECTION_MASTER_KEY_ID);
+         if (masterKeyId != null) {
+           tbld.setMasterKeyId(masterKeyId);
+         }
+-        String expiryDateStr = token.removeChildStr("expiryDate");
++        String expiryDateStr =
++            token.removeChildStr(SECRET_MANAGER_SECTION_EXPIRY_DATE);
+         if (expiryDateStr != null) {
+           tbld.setExpiryDate(dateStrToLong(expiryDateStr));
+         }
+         token.verifyNoRemainingKeys("token");
+         tbld.build().writeDelimitedTo(out);
+       }
+-      expectTagEnd("SecretManagerSection");
++      expectTagEnd(SECRET_MANAGER_SECTION_NAME);
+       recordSectionLength(SectionName.SECRET_MANAGER.name());
+     }
+ 
+@@ -919,17 +937,20 @@ public void process() throws IOException {
+       Node node = new Node();
+       loadNodeChildren(node, "CacheManager fields", "pool", "directive");
+       CacheManagerSection.Builder b =  CacheManagerSection.newBuilder();
+-      Long nextDirectiveId = node.removeChildLong("nextDirectiveId");
++      Long nextDirectiveId =
++          node.removeChildLong(CACHE_MANAGER_SECTION_NEXT_DIRECTIVE_ID);
+       if (nextDirectiveId == null) {
+         throw new IOException("CacheManager section had no <nextDirectiveId>");
+       }
+       b.setNextDirectiveId(nextDirectiveId);
+-      Integer expectedNumPools = node.removeChildInt("numPools");
++      Integer expectedNumPools =
++          node.removeChildInt(CACHE_MANAGER_SECTION_NUM_POOLS);
+       if (expectedNumPools == null) {
+         throw new IOException("CacheManager section had no <numPools>");
+       }
+       b.setNumPools(expectedNumPools);
+-      Integer expectedNumDirectives = node.removeChildInt("numDirectives");
++      Integer expectedNumDirectives =
++          node.removeChildInt(CACHE_MANAGER_SECTION_NUM_DIRECTIVES);
+       if (expectedNumDirectives == null) {
+         throw new IOException("CacheManager section had no <numDirectives>");
+       }
+@@ -938,7 +959,7 @@ public void process() throws IOException {
+       long actualNumPools = 0;
+       while (actualNumPools < expectedNumPools) {
+         try {
+-          expectTag("pool", false);
++          expectTag(CACHE_MANAGER_SECTION_POOL, false);
+         } catch (IOException e) {
+           throw new IOException("Only read " + actualNumPools +
+               " cache pools out of " + expectedNumPools, e);
+@@ -951,7 +972,7 @@ public void process() throws IOException {
+       long actualNumDirectives = 0;
+       while (actualNumDirectives < expectedNumDirectives) {
+         try {
+-          expectTag("directive", false);
++          expectTag(CACHE_MANAGER_SECTION_DIRECTIVE, false);
+         } catch (IOException e) {
+           throw new IOException("Only read " + actualNumDirectives +
+               " cache pools out of " + expectedNumDirectives, e);
+@@ -961,38 +982,42 @@ public void process() throws IOException {
+         loadNodeChildren(pool, "directive fields", "");
+         processDirectiveXml(node);
+       }
+-      expectTagEnd("CacheManagerSection");
++      expectTagEnd(CACHE_MANAGER_SECTION_NAME);
+       recordSectionLength(SectionName.CACHE_MANAGER.name());
+     }
+ 
+     private void processPoolXml(Node pool) throws IOException {
+       CachePoolInfoProto.Builder bld = CachePoolInfoProto.newBuilder();
+-      String poolName = pool.removeChildStr("poolName");
++      String poolName =
++          pool.removeChildStr(CACHE_MANAGER_SECTION_POOL_NAME);
+       if (poolName == null) {
+         throw new IOException("<pool> found without <poolName>");
+       }
+       bld.setPoolName(poolName);
+-      String ownerName = pool.removeChildStr("ownerName");
++      String ownerName =
++          pool.removeChildStr(CACHE_MANAGER_SECTION_OWNER_NAME);
+       if (ownerName == null) {
+         throw new IOException("<pool> found without <ownerName>");
+       }
+       bld.setOwnerName(ownerName);
+-      String groupName = pool.removeChildStr("groupName");
++      String groupName =
++          pool.removeChildStr(CACHE_MANAGER_SECTION_GROUP_NAME);
+       if (groupName == null) {
+         throw new IOException("<pool> found without <groupName>");
+       }
+       bld.setGroupName(groupName);
+-      Integer mode = pool.removeChildInt("mode");
++      Integer mode = pool.removeChildInt(CACHE_MANAGER_SECTION_MODE);
+       if (mode == null) {
+         throw new IOException("<pool> found without <mode>");
+       }
+       bld.setMode(mode);
+-      Long limit = pool.removeChildLong("limit");
++      Long limit = pool.removeChildLong(CACHE_MANAGER_SECTION_LIMIT);
+       if (limit == null) {
+         throw new IOException("<pool> found without <limit>");
+       }
+       bld.setLimit(limit);
+-      Long maxRelativeExpiry = pool.removeChildLong("maxRelativeExpiry");
++      Long maxRelativeExpiry =
++          pool.removeChildLong(CACHE_MANAGER_SECTION_MAX_RELATIVE_EXPIRY);
+       if (maxRelativeExpiry == null) {
+         throw new IOException("<pool> found without <maxRelativeExpiry>");
+       }
+@@ -1004,37 +1029,39 @@ private void processPoolXml(Node pool) throws IOException {
+     private void processDirectiveXml(Node directive) throws IOException {
+       CacheDirectiveInfoProto.Builder bld =
+           CacheDirectiveInfoProto.newBuilder();
+-      Long id = directive.removeChildLong("id");
++      Long id = directive.removeChildLong(SECTION_ID);
+       if (id == null) {
+         throw new IOException("<directive> found without <id>");
+       }
+       bld.setId(id);
+-      String path = directive.removeChildStr("path");
++      String path = directive.removeChildStr(SECTION_PATH);
+       if (path == null) {
+         throw new IOException("<directive> found without <path>");
+       }
+       bld.setPath(path);
+-      Integer replication = directive.removeChildInt("replication");
++      Integer replication = directive.removeChildInt(SECTION_REPLICATION);
+       if (replication == null) {
+         throw new IOException("<directive> found without <replication>");
+       }
+       bld.setReplication(replication);
+-      String pool = directive.removeChildStr("pool");
++      String pool = directive.removeChildStr(CACHE_MANAGER_SECTION_POOL);
+       if (path == null) {
+         throw new IOException("<directive> found without <pool>");
+       }
+       bld.setPool(pool);
+-      Node expiration = directive.removeChild("expiration");
++      Node expiration =
++          directive.removeChild(CACHE_MANAGER_SECTION_EXPIRATION);
+       if (expiration != null) {
+         CacheDirectiveInfoExpirationProto.Builder ebld =
+             CacheDirectiveInfoExpirationProto.newBuilder();
+-        Long millis = expiration.removeChildLong("millis");
++        Long millis =
++            expiration.removeChildLong(CACHE_MANAGER_SECTION_MILLIS);
+         if (millis == null) {
+           throw new IOException("cache directive <expiration> found " +
+               "without <millis>");
+         }
+         ebld.setMillis(millis);
+-        if (expiration.removeChildBool("relative")) {
++        if (expiration.removeChildBool(CACHE_MANAGER_SECTION_RELATIVE)) {
+           ebld.setIsRelative(true);
+         } else {
+           ebld.setIsRelative(false);
+@@ -1054,7 +1081,7 @@ public void process() throws IOException {
+       // There is no header for this section.
+       // We process the repeated <ref> elements.
+       while (true) {
+-        XMLEvent ev = expectTag("ref", true);
++        XMLEvent ev = expectTag(INODE_REFERENCE_SECTION_REF, true);
+         if (ev.isEndElement()) {
+           break;
+         }
+@@ -1062,7 +1089,8 @@ public void process() throws IOException {
+         FsImageProto.INodeReferenceSection.INodeReference.Builder bld =
+             FsImageProto.INodeReferenceSection.INodeReference.newBuilder();
+         loadNodeChildren(inodeRef, "INodeReference");
+-        Long referredId = inodeRef.removeChildLong("referredId");
++        Long referredId =
++            inodeRef.removeChildLong(INODE_REFERENCE_SECTION_REFERRED_ID);
+         if (referredId != null) {
+           bld.setReferredId(referredId);
+         }
+@@ -1070,11 +1098,13 @@ public void process() throws IOException {
+         if (name != null) {
+           bld.setName(ByteString.copyFrom(name, "UTF8"));
+         }
+-        Integer dstSnapshotId = inodeRef.removeChildInt("dstSnapshotId");
++        Integer dstSnapshotId = inodeRef.removeChildInt(
++            INODE_REFERENCE_SECTION_DST_SNAPSHOT_ID);
+         if (dstSnapshotId != null) {
+           bld.setDstSnapshotId(dstSnapshotId);
+         }
+-        Integer lastSnapshotId = inodeRef.removeChildInt("lastSnapshotId");
++        Integer lastSnapshotId = inodeRef.removeChildInt(
++            INODE_REFERENCE_SECTION_LAST_SNAPSHOT_ID);
+         if (lastSnapshotId != null) {
+           bld.setLastSnapshotId(lastSnapshotId);
+         }
+@@ -1093,7 +1123,7 @@ public void process() throws IOException {
+       // No header for this section
+       // Process the repeated <directory> elements.
+       while (true) {
+-        XMLEvent ev = expectTag("directory", true);
++        XMLEvent ev = expectTag(INODE_DIRECTORY_SECTION_DIRECTORY, true);
+         if (ev.isEndElement()) {
+           break;
+         }
+@@ -1101,19 +1131,22 @@ public void process() throws IOException {
+         FsImageProto.INodeDirectorySection.DirEntry.Builder bld =
+             FsImageProto.INodeDirectorySection.DirEntry.newBuilder();
+         loadNodeChildren(directory, "directory");
+-        Long parent = directory.removeChildLong("parent");
++        Long parent = directory.removeChildLong(
++            INODE_DIRECTORY_SECTION_PARENT);
+         if (parent != null) {
+           bld.setParent(parent);
+         }
+         while (true) {
+-          Node child = directory.removeChild("child");
++          Node child = directory.removeChild(
++              INODE_DIRECTORY_SECTION_CHILD);
+           if (child == null) {
+             break;
+           }
+           bld.addChildren(Long.parseLong(child.getVal()));
+         }
+         while (true) {
+-          Node refChild = directory.removeChild("refChild");
++          Node refChild = directory.removeChild(
++              INODE_DIRECTORY_SECTION_REF_CHILD);
+           if (refChild == null) {
+             break;
+           }
+@@ -1135,7 +1168,7 @@ public void process() throws IOException {
+       // No header for this section type.
+       // Process the repeated files under construction elements.
+       while (true) {
+-        XMLEvent ev = expectTag("inode", true);
++        XMLEvent ev = expectTag(INODE_SECTION_INODE, true);
+         if (ev.isEndElement()) {
+           break;
+         }
+@@ -1143,11 +1176,12 @@ public void process() throws IOException {
+         loadNodeChildren(fileUnderConstruction, "file under construction");
+         FileUnderConstructionEntry.Builder bld =
+             FileUnderConstructionEntry.newBuilder();
+-        Long id = fileUnderConstruction.removeChildLong("id");
++        Long id = fileUnderConstruction.removeChildLong(SECTION_ID);
+         if (id != null) {
+           bld.setInodeId(id);
+         }
+-        String fullpath = fileUnderConstruction.removeChildStr("path");
++        String fullpath =
++            fileUnderConstruction.removeChildStr(SECTION_PATH);
+         if (fullpath != null) {
+           bld.setFullPath(fullpath);
+         }
+@@ -1167,24 +1201,26 @@ public void process() throws IOException {
+           FsImageProto.SnapshotSection.newBuilder();
+       Node header = new Node();
+       loadNodeChildren(header, "SnapshotSection fields", "snapshot");
+-      Integer snapshotCounter = header.removeChildInt("snapshotCounter");
++      Integer snapshotCounter = header.removeChildInt(
++          SNAPSHOT_SECTION_SNAPSHOT_COUNTER);
+       if (snapshotCounter == null) {
+         throw new IOException("No <snapshotCounter> entry found in " +
+             "SnapshotSection header");
+       }
+       bld.setSnapshotCounter(snapshotCounter);
+-      Integer expectedNumSnapshots = header.removeChildInt("numSnapshots");
++      Integer expectedNumSnapshots = header.removeChildInt(
++          SNAPSHOT_SECTION_NUM_SNAPSHOTS);
+       if (expectedNumSnapshots == null) {
+         throw new IOException("No <numSnapshots> entry found in " +
+             "SnapshotSection header");
+       }
+       bld.setNumSnapshots(expectedNumSnapshots);
+       while (true) {
+-        Node sd = header.removeChild("snapshottableDir");
++        Node sd = header.removeChild(SNAPSHOT_SECTION_SNAPSHOT_TABLE_DIR);
+         if (sd == null) {
+           break;
+         }
+-        Long dir = sd.removeChildLong("dir");
++        Long dir = sd.removeChildLong(SNAPSHOT_SECTION_DIR);
+         sd.verifyNoRemainingKeys("<dir>");
+         bld.addSnapshottableDir(dir);
+       }
+@@ -1193,7 +1229,7 @@ public void process() throws IOException {
+       int actualNumSnapshots = 0;
+       while (actualNumSnapshots < expectedNumSnapshots) {
+         try {
+-          expectTag("snapshot", false);
++          expectTag(SNAPSHOT_SECTION_SNAPSHOT, false);
+         } catch (IOException e) {
+           throw new IOException("Only read " + actualNumSnapshots +
+               " <snapshot> entries out of " + expectedNumSnapshots, e);
+@@ -1203,17 +1239,17 @@ public void process() throws IOException {
+         loadNodeChildren(snapshot, "snapshot fields");
+         FsImageProto.SnapshotSection.Snapshot.Builder s =
+             FsImageProto.SnapshotSection.Snapshot.newBuilder();
+-        Integer snapshotId = snapshot.removeChildInt("id");
++        Integer snapshotId = snapshot.removeChildInt(SECTION_ID);
+         if (snapshotId == null) {
+           throw new IOException("<snapshot> section was missing <id>");
+         }
+         s.setSnapshotId(snapshotId);
+-        Node snapshotRoot = snapshot.removeChild("root");
++        Node snapshotRoot = snapshot.removeChild(SNAPSHOT_SECTION_ROOT);
+         INodeSection.INode.Builder inodeBld = processINodeXml(snapshotRoot);
+         s.setRoot(inodeBld);
+         s.build().writeDelimitedTo(out);
+       }
+-      expectTagEnd("SnapshotSection");
++      expectTagEnd(SNAPSHOT_SECTION_NAME);
+       recordSectionLength(SectionName.SNAPSHOT.name());
+     }
+   }
+@@ -1229,15 +1265,15 @@ public void process() throws IOException {
+         XMLEvent ev = expectTag("[diff start tag]", true);
+         if (ev.isEndElement()) {
+           String name = ev.asEndElement().getName().getLocalPart();
+-          if (name.equals("SnapshotDiffSection")) {
++          if (name.equals(SNAPSHOT_DIFF_SECTION_NAME)) {
+             break;
+           }
+           throw new IOException("Got unexpected end tag for " + name);
+         }
+         String tagName = ev.asStartElement().getName().getLocalPart();
+-        if (tagName.equals("dirDiffEntry")) {
++        if (tagName.equals(SNAPSHOT_DIFF_SECTION_DIR_DIFF_ENTRY)) {
+           processDirDiffEntry();
+-        } else if (tagName.equals("fileDiffEntry")) {
++        } else if (tagName.equals(SNAPSHOT_DIFF_SECTION_FILE_DIFF_ENTRY)) {
+           processFileDiffEntry();
+         } else {
+           throw new IOException("SnapshotDiffSection contained unexpected " +
+@@ -1253,12 +1289,14 @@ private void processDirDiffEntry() throws IOException {
+       headerBld.setType(DiffEntry.Type.DIRECTORYDIFF);
+       Node dirDiffHeader = new Node();
+       loadNodeChildren(dirDiffHeader, "dirDiffEntry fields", "dirDiff");
+-      Long inodeId = dirDiffHeader.removeChildLong("inodeId");
++      Long inodeId = dirDiffHeader.removeChildLong(
++          SNAPSHOT_DIFF_SECTION_INODE_ID);
+       if (inodeId == null) {
+         throw new IOException("<dirDiffEntry> contained no <inodeId> entry.");
+       }
+       headerBld.setInodeId(inodeId);
+-      Integer expectedDiffs = dirDiffHeader.removeChildInt("count");
++      Integer expectedDiffs = dirDiffHeader.removeChildInt(
++          SNAPSHOT_DIFF_SECTION_COUNT);
+       if (expectedDiffs == null) {
+         throw new IOException("<dirDiffEntry> contained no <count> entry.");
+       }
+@@ -1267,7 +1305,7 @@ private void processDirDiffEntry() throws IOException {
+       headerBld.build().writeDelimitedTo(out);
+       for (int actualDiffs = 0; actualDiffs < expectedDiffs; actualDiffs++) {
+         try {
+-          expectTag("dirDiff", false);
++          expectTag(SNAPSHOT_DIFF_SECTION_DIR_DIFF, false);
+         } catch (IOException e) {
+           throw new IOException("Only read " + (actualDiffs + 1) +
+               " diffs out of " + expectedDiffs, e);
+@@ -1276,38 +1314,43 @@ private void processDirDiffEntry() throws IOException {
+         loadNodeChildren(dirDiff, "dirDiff fields");
+         FsImageProto.SnapshotDiffSection.DirectoryDiff.Builder bld =
+             FsImageProto.SnapshotDiffSection.DirectoryDiff.newBuilder();
+-        Integer snapshotId = dirDiff.removeChildInt("snapshotId");
++        Integer snapshotId = dirDiff.removeChildInt(
++            SNAPSHOT_DIFF_SECTION_SNAPSHOT_ID);
+         if (snapshotId != null) {
+           bld.setSnapshotId(snapshotId);
+         }
+-        Integer childrenSize = dirDiff.removeChildInt("childrenSize");
++        Integer childrenSize = dirDiff.removeChildInt(
++            SNAPSHOT_DIFF_SECTION_CHILDREN_SIZE);
+         if (childrenSize == null) {
+           throw new IOException("Expected to find <childrenSize> in " +
+               "<dirDiff> section.");
+         }
+-        bld.setIsSnapshotRoot(dirDiff.removeChildBool("isSnapshotRoot"));
++        bld.setIsSnapshotRoot(dirDiff.removeChildBool(
++            SNAPSHOT_DIFF_SECTION_IS_SNAPSHOT_ROOT));
+         bld.setChildrenSize(childrenSize);
+-        String name = dirDiff.removeChildStr("name");
++        String name = dirDiff.removeChildStr(SECTION_NAME);
+         if (name != null) {
+           bld.setName(ByteString.copyFrom(name, "UTF8"));
+         }
+         // TODO: add missing snapshotCopy field to XML
+-        Integer expectedCreatedListSize =
+-            dirDiff.removeChildInt("createdListSize");
++        Integer expectedCreatedListSize = dirDiff.removeChildInt(
++            SNAPSHOT_DIFF_SECTION_CREATED_LIST_SIZE);
+         if (expectedCreatedListSize == null) {
+           throw new IOException("Expected to find <createdListSize> in " +
+               "<dirDiff> section.");
+         }
+         bld.setCreatedListSize(expectedCreatedListSize);
+         while (true) {
+-          Node deleted = dirDiff.removeChild("deletedInode");
++          Node deleted = dirDiff.removeChild(
++              SNAPSHOT_DIFF_SECTION_DELETED_INODE);
+           if (deleted == null){
+             break;
+           }
+           bld.addDeletedINode(Long.parseLong(deleted.getVal()));
+         }
+         while (true) {
+-          Node deleted = dirDiff.removeChild("deletedInoderef");
++          Node deleted = dirDiff.removeChild(
++              SNAPSHOT_DIFF_SECTION_DELETED_INODE_REF);
+           if (deleted == null){
+             break;
+           }
+@@ -1317,11 +1360,12 @@ private void processDirDiffEntry() throws IOException {
+         // After the DirectoryDiff header comes a list of CreatedListEntry PBs.
+         int actualCreatedListSize = 0;
+         while (true) {
+-          Node created = dirDiff.removeChild("created");
++          Node created = dirDiff.removeChild(
++              SNAPSHOT_DIFF_SECTION_CREATED);
+           if (created == null){
+             break;
+           }
+-          String cleName = created.removeChildStr("name");
++          String cleName = created.removeChildStr(SECTION_NAME);
+           if (cleName == null) {
+             throw new IOException("Expected <created> entry to have " +
+                 "a <name> field");
+@@ -1339,7 +1383,7 @@ private void processDirDiffEntry() throws IOException {
+         }
+         dirDiff.verifyNoRemainingKeys("dirDiff");
+       }
+-      expectTagEnd("dirDiffEntry");
++      expectTagEnd(SNAPSHOT_DIFF_SECTION_DIR_DIFF_ENTRY);
+     }
+ 
+     private void processFileDiffEntry() throws IOException {
+@@ -1348,12 +1392,14 @@ private void processFileDiffEntry() throws IOException {
+       headerBld.setType(DiffEntry.Type.FILEDIFF);
+       Node fileDiffHeader = new Node();
+       loadNodeChildren(fileDiffHeader, "fileDiffEntry fields", "fileDiff");
+-      Long inodeId = fileDiffHeader.removeChildLong("inodeid");
++      Long inodeId = fileDiffHeader.removeChildLong(
++          SNAPSHOT_DIFF_SECTION_INODE_ID);
+       if (inodeId == null) {
+         throw new IOException("<fileDiffEntry> contained no <inodeid> entry.");
+       }
+       headerBld.setInodeId(inodeId);
+-      Integer expectedDiffs = fileDiffHeader.removeChildInt("count");
++      Integer expectedDiffs = fileDiffHeader.removeChildInt(
++          SNAPSHOT_DIFF_SECTION_COUNT);
+       if (expectedDiffs == null) {
+         throw new IOException("<fileDiffEntry> contained no <count> entry.");
+       }
+@@ -1362,7 +1408,7 @@ private void processFileDiffEntry() throws IOException {
+       headerBld.build().writeDelimitedTo(out);
+       for (int actualDiffs = 0; actualDiffs < expectedDiffs; actualDiffs++) {
+         try {
+-          expectTag("fileDiff", false);
++          expectTag(SNAPSHOT_DIFF_SECTION_FILE_DIFF, false);
+         } catch (IOException e) {
+           throw new IOException("Only read " + (actualDiffs + 1) +
+               " diffs out of " + expectedDiffs, e);
+@@ -1371,15 +1417,17 @@ private void processFileDiffEntry() throws IOException {
+         loadNodeChildren(fileDiff, "fileDiff fields");
+         FsImageProto.SnapshotDiffSection.FileDiff.Builder bld =
+             FsImageProto.SnapshotDiffSection.FileDiff.newBuilder();
+-        Integer snapshotId = fileDiff.removeChildInt("snapshotId");
++        Integer snapshotId = fileDiff.removeChildInt(
++            SNAPSHOT_DIFF_SECTION_SNAPSHOT_ID);
+         if (snapshotId != null) {
+           bld.setSnapshotId(snapshotId);
+         }
+-        Long size = fileDiff.removeChildLong("size");
++        Long size = fileDiff.removeChildLong(
++            SNAPSHOT_DIFF_SECTION_SIZE);
+         if (size != null) {
+           bld.setFileSize(size);
+         }
+-        String name = fileDiff.removeChildStr("name");
++        String name = fileDiff.removeChildStr(SECTION_NAME);
+         if (name != null) {
+           bld.setName(ByteString.copyFrom(name, "UTF8"));
+         }
+@@ -1388,7 +1436,7 @@ private void processFileDiffEntry() throws IOException {
+         fileDiff.verifyNoRemainingKeys("fileDiff");
+         bld.build().writeDelimitedTo(out);
+       }
+-      expectTagEnd("fileDiffEntry");
++      expectTagEnd(SNAPSHOT_DIFF_SECTION_FILE_DIFF_ENTRY);
+     }
+   }
+ 
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/offlineImageViewer/PBImageXmlWriter.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/offlineImageViewer/PBImageXmlWriter.java
+index 71dc939..ba2dc06 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/offlineImageViewer/PBImageXmlWriter.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/offlineImageViewer/PBImageXmlWriter.java
+@@ -77,6 +77,154 @@
+  */
+ @InterfaceAudience.Private
+ public final class PBImageXmlWriter {
++  public static final String NAME_SECTION_NAME = "NameSection";
++  public static final String INODE_SECTION_NAME = "INodeSection";
++  public static final String SECRET_MANAGER_SECTION_NAME =
++      "SecretManagerSection";
++  public static final String CACHE_MANAGER_SECTION_NAME = "CacheManagerSection";
++  public static final String SNAPSHOT_DIFF_SECTION_NAME = "SnapshotDiffSection";
++  public static final String INODE_REFERENCE_SECTION_NAME =
++      "INodeReferenceSection";
++  public static final String INODE_DIRECTORY_SECTION_NAME =
++      "INodeDirectorySection";
++  public static final String FILE_UNDER_CONSTRUCTION_SECTION_NAME =
++      "FileUnderConstructionSection";
++  public static final String SNAPSHOT_SECTION_NAME = "SnapshotSection";
++
++  public static final String SECTION_ID = "id";
++  public static final String SECTION_REPLICATION = "replication";
++  public static final String SECTION_PATH = "path";
++  public static final String SECTION_NAME = "name";
++
++  public static final String NAME_SECTION_NAMESPACE_ID = "namespaceId";
++  public static final String NAME_SECTION_GENSTAMPV1 = "genstampV1";
++  public static final String NAME_SECTION_GENSTAMPV2 = "genstampV2";
++  public static final String NAME_SECTION_GENSTAMPV1_LIMIT = "genstampV1Limit";
++  public static final String NAME_SECTION_LAST_ALLOCATED_BLOCK_ID =
++      "lastAllocatedBlockId";
++  public static final String NAME_SECTION_TXID = "txid";
++  public static final String NAME_SECTION_ROLLING_UPGRADE_START_TIME =
++      "rollingUpgradeStartTime";
++  public static final String NAME_SECTION_LAST_ALLOCATED_STRIPED_BLOCK_ID =
++      "lastAllocatedStripedBlockId";
++
++  public static final String INODE_SECTION_LAST_INODE_ID = "lastInodeId";
++  public static final String INODE_SECTION_NUM_INODES = "numInodes";
++  public static final String INODE_SECTION_TYPE = "type";
++  public static final String INODE_SECTION_MTIME = "mtime";
++  public static final String INODE_SECTION_ATIME = "atime";
++  public static final String INODE_SECTION_PREFERRED_BLOCK_SIZE =
++      "preferredBlockSize";
++  public static final String INODE_SECTION_PERMISSION = "permission";
++  public static final String INODE_SECTION_BLOCKS = "blocks";
++  public static final String INODE_SECTION_BLOCK = "block";
++  public static final String INODE_SECTION_GEMSTAMP = "genstamp";
++  public static final String INODE_SECTION_NUM_BYTES = "numBytes";
++  public static final String INODE_SECTION_FILE_UNDER_CONSTRUCTION =
++      "file-under-construction";
++  public static final String INODE_SECTION_CLIENT_NAME = "clientName";
++  public static final String INODE_SECTION_CLIENT_MACHINE = "clientMachine";
++  public static final String INODE_SECTION_ACL = "acl";
++  public static final String INODE_SECTION_ACLS = "acls";
++  public static final String INODE_SECTION_XATTR = "xattr";
++  public static final String INODE_SECTION_XATTRS = "xattrs";
++  public static final String INODE_SECTION_STORAGE_POLICY_ID =
++      "storagePolicyId";
++  public static final String INODE_SECTION_IS_STRIPED = "isStriped";
++  public static final String INODE_SECTION_NS_QUOTA = "nsquota";
++  public static final String INODE_SECTION_DS_QUOTA = "dsquota";
++  public static final String INODE_SECTION_TYPE_QUOTA = "typeQuota";
++  public static final String INODE_SECTION_QUOTA = "quota";
++  public static final String INODE_SECTION_TARGET = "target";
++  public static final String INODE_SECTION_NS = "ns";
++  public static final String INODE_SECTION_VAL = "val";
++  public static final String INODE_SECTION_VAL_HEX = "valHex";
++  public static final String INODE_SECTION_INODE = "inode";
++
++  public static final String SECRET_MANAGER_SECTION_CURRENT_ID = "currentId";
++  public static final String SECRET_MANAGER_SECTION_TOKEN_SEQUENCE_NUMBER =
++      "tokenSequenceNumber";
++  public static final String SECRET_MANAGER_SECTION_NUM_DELEGATION_KEYS =
++      "numDelegationKeys";
++  public static final String SECRET_MANAGER_SECTION_NUM_TOKENS = "numTokens";
++  public static final String SECRET_MANAGER_SECTION_EXPIRY = "expiry";
++  public static final String SECRET_MANAGER_SECTION_KEY = "key";
++  public static final String SECRET_MANAGER_SECTION_DELEGATION_KEY =
++      "delegationKey";
++  public static final String SECRET_MANAGER_SECTION_VERSION = "version";
++  public static final String SECRET_MANAGER_SECTION_OWNER = "owner";
++  public static final String SECRET_MANAGER_SECTION_RENEWER = "renewer";
++  public static final String SECRET_MANAGER_SECTION_REAL_USER = "realUser";
++  public static final String SECRET_MANAGER_SECTION_ISSUE_DATE = "issueDate";
++  public static final String SECRET_MANAGER_SECTION_MAX_DATE = "maxDate";
++  public static final String SECRET_MANAGER_SECTION_SEQUENCE_NUMBER =
++      "sequenceNumber";
++  public static final String SECRET_MANAGER_SECTION_MASTER_KEY_ID =
++      "masterKeyId";
++  public static final String SECRET_MANAGER_SECTION_EXPIRY_DATE = "expiryDate";
++  public static final String SECRET_MANAGER_SECTION_TOKEN = "token";
++
++  public static final String CACHE_MANAGER_SECTION_NEXT_DIRECTIVE_ID =
++      "nextDirectiveId";
++  public static final String CACHE_MANAGER_SECTION_NUM_POOLS = "numPools";
++  public static final String CACHE_MANAGER_SECTION_NUM_DIRECTIVES =
++      "numDirectives";
++  public static final String CACHE_MANAGER_SECTION_POOL_NAME = "poolName";
++  public static final String CACHE_MANAGER_SECTION_OWNER_NAME = "ownerName";
++  public static final String CACHE_MANAGER_SECTION_GROUP_NAME = "groupName";
++  public static final String CACHE_MANAGER_SECTION_MODE = "mode";
++  public static final String CACHE_MANAGER_SECTION_LIMIT = "limit";
++  public static final String CACHE_MANAGER_SECTION_MAX_RELATIVE_EXPIRY =
++      "maxRelativeExpiry";
++  public static final String CACHE_MANAGER_SECTION_POOL = "pool";
++  public static final String CACHE_MANAGER_SECTION_EXPIRATION = "expiration";
++  public static final String CACHE_MANAGER_SECTION_MILLIS = "millis";
++  public static final String CACHE_MANAGER_SECTION_RELATIVE = "relative";
++  public static final String CACHE_MANAGER_SECTION_DIRECTIVE = "directive";
++
++  public static final String SNAPSHOT_DIFF_SECTION_INODE_ID = "inodeId";
++  public static final String SNAPSHOT_DIFF_SECTION_COUNT = "count";
++  public static final String SNAPSHOT_DIFF_SECTION_SNAPSHOT_ID = "snapshotId";
++  public static final String SNAPSHOT_DIFF_SECTION_CHILDREN_SIZE =
++      "childrenSize";
++  public static final String SNAPSHOT_DIFF_SECTION_IS_SNAPSHOT_ROOT =
++      "isSnapshotRoot";
++  public static final String SNAPSHOT_DIFF_SECTION_CREATED_LIST_SIZE =
++      "createdListSize";
++  public static final String SNAPSHOT_DIFF_SECTION_DELETED_INODE =
++      "deletedInode";
++  public static final String SNAPSHOT_DIFF_SECTION_DELETED_INODE_REF =
++      "deletedInoderef";
++  public static final String SNAPSHOT_DIFF_SECTION_CREATED = "created";
++  public static final String SNAPSHOT_DIFF_SECTION_SIZE = "size";
++  public static final String SNAPSHOT_DIFF_SECTION_FILE_DIFF_ENTRY =
++      "fileDiffEntry";
++  public static final String SNAPSHOT_DIFF_SECTION_DIR_DIFF_ENTRY =
++      "dirDiffEntry";
++  public static final String SNAPSHOT_DIFF_SECTION_FILE_DIFF = "fileDiff";
++  public static final String SNAPSHOT_DIFF_SECTION_DIR_DIFF = "dirDiff";
++
++  public static final String INODE_REFERENCE_SECTION_REFERRED_ID = "referredId";
++  public static final String INODE_REFERENCE_SECTION_DST_SNAPSHOT_ID =
++      "dstSnapshotId";
++  public static final String INODE_REFERENCE_SECTION_LAST_SNAPSHOT_ID =
++      "lastSnapshotId";
++  public static final String INODE_REFERENCE_SECTION_REF = "ref";
++
++  public static final String INODE_DIRECTORY_SECTION_PARENT = "parent";
++  public static final String INODE_DIRECTORY_SECTION_CHILD = "child";
++  public static final String INODE_DIRECTORY_SECTION_REF_CHILD = "refChild";
++  public static final String INODE_DIRECTORY_SECTION_DIRECTORY = "directory";
++
++  public static final String SNAPSHOT_SECTION_SNAPSHOT_COUNTER =
++      "snapshotCounter";
++  public static final String SNAPSHOT_SECTION_NUM_SNAPSHOTS = "numSnapshots";
++  public static final String SNAPSHOT_SECTION_SNAPSHOT_TABLE_DIR =
++      "snapshottableDir";
++  public static final String SNAPSHOT_SECTION_DIR = "dir";
++  public static final String SNAPSHOT_SECTION_ROOT = "root";
++  public static final String SNAPSHOT_SECTION_SNAPSHOT = "snapshot";
++
+   private final Configuration conf;
+   private final PrintStream out;
+   private final SimpleDateFormat isoDateFormat;
+@@ -177,98 +325,106 @@ public int compare(FileSummary.Section s1, FileSummary.Section s2) {
+   }
+ 
+   private void dumpCacheManagerSection(InputStream is) throws IOException {
+-    out.print("<CacheManagerSection>");
++    out.print("<" + CACHE_MANAGER_SECTION_NAME + ">");
+     CacheManagerSection s = CacheManagerSection.parseDelimitedFrom(is);
+-    o("nextDirectiveId", s.getNextDirectiveId());
+-    o("numDirectives", s.getNumDirectives());
+-    o("numPools", s.getNumPools());
++    o(CACHE_MANAGER_SECTION_NEXT_DIRECTIVE_ID, s.getNextDirectiveId());
++    o(CACHE_MANAGER_SECTION_NUM_DIRECTIVES, s.getNumDirectives());
++    o(CACHE_MANAGER_SECTION_NUM_POOLS, s.getNumPools());
+     for (int i = 0; i < s.getNumPools(); ++i) {
+       CachePoolInfoProto p = CachePoolInfoProto.parseDelimitedFrom(is);
+-      out.print("<pool>");
+-      o("poolName", p.getPoolName()).o("ownerName", p.getOwnerName())
+-          .o("groupName", p.getGroupName()).o("mode", p.getMode())
+-          .o("limit", p.getLimit())
+-          .o("maxRelativeExpiry", p.getMaxRelativeExpiry());
+-      out.print("</pool>\n");
++      out.print("<" + CACHE_MANAGER_SECTION_POOL +">");
++      o(CACHE_MANAGER_SECTION_POOL_NAME, p.getPoolName()).
++          o(CACHE_MANAGER_SECTION_OWNER_NAME, p.getOwnerName())
++          .o(CACHE_MANAGER_SECTION_GROUP_NAME, p.getGroupName())
++          .o(CACHE_MANAGER_SECTION_MODE, p.getMode())
++          .o(CACHE_MANAGER_SECTION_LIMIT, p.getLimit())
++          .o(CACHE_MANAGER_SECTION_MAX_RELATIVE_EXPIRY,
++              p.getMaxRelativeExpiry());
++      out.print("</" + CACHE_MANAGER_SECTION_POOL + ">\n");
+     }
+     for (int i = 0; i < s.getNumDirectives(); ++i) {
+       CacheDirectiveInfoProto p = CacheDirectiveInfoProto
+           .parseDelimitedFrom(is);
+-      out.print("<directive>");
+-      o("id", p.getId()).o("path", p.getPath())
+-          .o("replication", p.getReplication()).o("pool", p.getPool());
+-      out.print("<expiration>");
++      out.print("<" + CACHE_MANAGER_SECTION_DIRECTIVE + ">");
++      o(SECTION_ID, p.getId()).o(SECTION_PATH, p.getPath())
++          .o(SECTION_REPLICATION, p.getReplication())
++          .o(CACHE_MANAGER_SECTION_POOL, p.getPool());
++      out.print("<" + CACHE_MANAGER_SECTION_EXPIRATION +">");
+       CacheDirectiveInfoExpirationProto e = p.getExpiration();
+-      o("millis", e.getMillis()).o("relative", e.getIsRelative());
+-      out.print("</expiration>\n");
+-      out.print("</directive>\n");
++      o(CACHE_MANAGER_SECTION_MILLIS, e.getMillis())
++          .o(CACHE_MANAGER_SECTION_RELATIVE, e.getIsRelative());
++      out.print("</" + CACHE_MANAGER_SECTION_EXPIRATION+ ">\n");
++      out.print("</" + CACHE_MANAGER_SECTION_DIRECTIVE + ">\n");
+     }
+-    out.print("</CacheManagerSection>\n");
++    out.print("</" + CACHE_MANAGER_SECTION_NAME + ">\n");
+ 
+   }
+ 
+   private void dumpFileUnderConstructionSection(InputStream in)
+       throws IOException {
+-    out.print("<FileUnderConstructionSection>");
++    out.print("<" + FILE_UNDER_CONSTRUCTION_SECTION_NAME + ">");
+     while (true) {
+       FileUnderConstructionEntry e = FileUnderConstructionEntry
+           .parseDelimitedFrom(in);
+       if (e == null) {
+         break;
+       }
+-      out.print("<inode>");
+-      o("id", e.getInodeId()).o("path", e.getFullPath());
+-      out.print("</inode>\n");
++      out.print("<" + INODE_SECTION_INODE + ">");
++      o(SECTION_ID, e.getInodeId())
++          .o(SECTION_PATH, e.getFullPath());
++      out.print("</" + INODE_SECTION_INODE + ">\n");
+     }
+-    out.print("</FileUnderConstructionSection>\n");
++    out.print("</" + FILE_UNDER_CONSTRUCTION_SECTION_NAME + ">\n");
+   }
+ 
+   private void dumpXattrs(INodeSection.XAttrFeatureProto xattrs) {
+-    out.print("<xattrs>");
++    out.print("<" + INODE_SECTION_XATTRS + ">");
+     for (INodeSection.XAttrCompactProto xattr : xattrs.getXAttrsList()) {
+-      out.print("<xattr>");
++      out.print("<" + INODE_SECTION_XATTR + ">");
+       int encodedName = xattr.getName();
+       int ns = (XATTR_NAMESPACE_MASK & (encodedName >> XATTR_NAMESPACE_OFFSET)) |
+           ((XATTR_NAMESPACE_EXT_MASK & (encodedName >> XATTR_NAMESPACE_EXT_OFFSET)) << 2);
+-      o("ns", XAttrProtos.XAttrProto.
++      o(INODE_SECTION_NS, XAttrProtos.XAttrProto.
+           XAttrNamespaceProto.valueOf(ns).toString());
+-      o("name", stringTable[XATTR_NAME_MASK & (encodedName >> XATTR_NAME_OFFSET)]);
++      o(SECTION_NAME,
++          stringTable[XATTR_NAME_MASK & (encodedName >> XATTR_NAME_OFFSET)]);
+       ByteString val = xattr.getValue();
+       if (val.isValidUtf8()) {
+-        o("val", val.toStringUtf8());
++        o(INODE_SECTION_VAL, val.toStringUtf8());
+       } else {
+-        o("valHex", Hex.encodeHexString(val.toByteArray()));
++        o(INODE_SECTION_VAL_HEX, Hex.encodeHexString(val.toByteArray()));
+       }
+-      out.print("</xattr>");
++      out.print("</" + INODE_SECTION_XATTR + ">");
+     }
+-    out.print("</xattrs>");
++    out.print("</" + INODE_SECTION_XATTRS + ">");
+   }
+ 
+   private void dumpINodeDirectory(INodeDirectory d) {
+-    o("mtime", d.getModificationTime()).o("permission",
+-        dumpPermission(d.getPermission()));
++    o(INODE_SECTION_MTIME, d.getModificationTime())
++        .o(INODE_SECTION_PERMISSION, dumpPermission(d.getPermission()));
+     if (d.hasXAttrs()) {
+       dumpXattrs(d.getXAttrs());
+     }
+     dumpAcls(d.getAcl());
+     if (d.hasDsQuota() && d.hasNsQuota()) {
+-      o("nsquota", d.getNsQuota()).o("dsquota", d.getDsQuota());
++      o(INODE_SECTION_NS_QUOTA, d.getNsQuota())
++        .o(INODE_SECTION_DS_QUOTA, d.getDsQuota());
+     }
+     INodeSection.QuotaByStorageTypeFeatureProto typeQuotas =
+       d.getTypeQuotas();
+     if (typeQuotas != null) {
+       for (INodeSection.QuotaByStorageTypeEntryProto entry:
+             typeQuotas.getQuotasList()) {
+-        out.print("<typeQuota>");
+-        o("type", entry.getStorageType().toString());
+-        o("quota", entry.getQuota());
+-        out.print("</typeQuota>");
++        out.print("<" + INODE_SECTION_TYPE_QUOTA + ">");
++        o(INODE_SECTION_TYPE, entry.getStorageType().toString());
++        o(INODE_SECTION_QUOTA, entry.getQuota());
++        out.print("</" + INODE_SECTION_TYPE_QUOTA + ">");
+       }
+     }
+   }
+ 
+   private void dumpINodeDirectorySection(InputStream in) throws IOException {
+-    out.print("<INodeDirectorySection>");
++    out.print("<" + INODE_DIRECTORY_SECTION_NAME + ">");
+     while (true) {
+       INodeDirectorySection.DirEntry e = INodeDirectorySection.DirEntry
+           .parseDelimitedFrom(in);
+@@ -276,21 +432,21 @@ private void dumpINodeDirectorySection(InputStream in) throws IOException {
+       if (e == null) {
+         break;
+       }
+-      out.print("<directory>");
+-      o("parent", e.getParent());
++      out.print("<" + INODE_DIRECTORY_SECTION_DIRECTORY + ">");
++      o(INODE_DIRECTORY_SECTION_PARENT, e.getParent());
+       for (long id : e.getChildrenList()) {
+-        o("child", id);
++        o(INODE_DIRECTORY_SECTION_CHILD, id);
+       }
+       for (int refId : e.getRefChildrenList()) {
+-        o("refChild", refId);
++        o(INODE_DIRECTORY_SECTION_REF_CHILD, refId);
+       }
+-      out.print("</directory>\n");
++      out.print("</" + INODE_DIRECTORY_SECTION_DIRECTORY + ">\n");
+     }
+-    out.print("</INodeDirectorySection>\n");
++    out.print("</" + INODE_DIRECTORY_SECTION_NAME + ">\n");
+   }
+ 
+   private void dumpINodeReferenceSection(InputStream in) throws IOException {
+-    out.print("<INodeReferenceSection>");
++    out.print("<" + INODE_REFERENCE_SECTION_NAME + ">");
+     while (true) {
+       INodeReferenceSection.INodeReference e = INodeReferenceSection
+           .INodeReference.parseDelimitedFrom(in);
+@@ -299,49 +455,53 @@ private void dumpINodeReferenceSection(InputStream in) throws IOException {
+       }
+       dumpINodeReference(e);
+     }
+-    out.print("</INodeReferenceSection>");
++    out.print("</" + INODE_REFERENCE_SECTION_NAME + ">");
+   }
+ 
+   private void dumpINodeReference(INodeReferenceSection.INodeReference r) {
+-    out.print("<ref>");
+-    o("referredId", r.getReferredId()).o("name", r.getName().toStringUtf8())
+-        .o("dstSnapshotId", r.getDstSnapshotId())
+-        .o("lastSnapshotId", r.getLastSnapshotId());
+-    out.print("</ref>\n");
++    out.print("<" + INODE_REFERENCE_SECTION_REF + ">");
++    o(INODE_REFERENCE_SECTION_REFERRED_ID, r.getReferredId())
++        .o(SECTION_NAME, r.getName().toStringUtf8())
++            .o(INODE_REFERENCE_SECTION_DST_SNAPSHOT_ID, r.getDstSnapshotId())
++            .o(INODE_REFERENCE_SECTION_LAST_SNAPSHOT_ID,
++            r.getLastSnapshotId());
++    out.print("</" + INODE_REFERENCE_SECTION_REF + ">\n");
+   }
+ 
+   private void dumpINodeFile(INodeSection.INodeFile f) {
+-    o("replication", f.getReplication()).o("mtime", f.getModificationTime())
+-        .o("atime", f.getAccessTime())
+-        .o("preferredBlockSize", f.getPreferredBlockSize())
+-        .o("permission", dumpPermission(f.getPermission()));
++    o(SECTION_REPLICATION, f.getReplication())
++        .o(INODE_SECTION_MTIME, f.getModificationTime())
++        .o(INODE_SECTION_ATIME, f.getAccessTime())
++        .o(INODE_SECTION_PREFERRED_BLOCK_SIZE, f.getPreferredBlockSize())
++        .o(INODE_SECTION_PERMISSION, dumpPermission(f.getPermission()));
+     if (f.hasXAttrs()) {
+       dumpXattrs(f.getXAttrs());
+     }
+     dumpAcls(f.getAcl());
+     if (f.getBlocksCount() > 0) {
+-      out.print("<blocks>");
++      out.print("<" + INODE_SECTION_BLOCKS + ">");
+       for (BlockProto b : f.getBlocksList()) {
+-        out.print("<block>");
+-        o("id", b.getBlockId()).o("genstamp", b.getGenStamp()).o("numBytes",
+-            b.getNumBytes());
+-        out.print("</block>\n");
++        out.print("<" + INODE_SECTION_BLOCK + ">");
++        o(SECTION_ID, b.getBlockId())
++            .o(INODE_SECTION_GEMSTAMP, b.getGenStamp())
++            .o(INODE_SECTION_NUM_BYTES, b.getNumBytes());
++        out.print("</" + INODE_SECTION_BLOCK + ">\n");
+       }
+-      out.print("</blocks>\n");
++      out.print("</" + INODE_SECTION_BLOCKS + ">\n");
+     }
+     if (f.hasStoragePolicyID()) {
+-      o("storagePolicyId", f.getStoragePolicyID());
++      o(INODE_SECTION_STORAGE_POLICY_ID, f.getStoragePolicyID());
+     }
+     if (f.getIsStriped()) {
+-      out.print("<isStriped/>");
++      out.print("<" + INODE_SECTION_IS_STRIPED + "/>");
+     }
+ 
+     if (f.hasFileUC()) {
+       INodeSection.FileUnderConstructionFeature u = f.getFileUC();
+-      out.print("<file-under-construction>");
+-      o("clientName", u.getClientName()).o("clientMachine",
+-          u.getClientMachine());
+-      out.print("</file-under-construction>\n");
++      out.print("<" + INODE_SECTION_FILE_UNDER_CONSTRUCTION + ">");
++      o(INODE_SECTION_CLIENT_NAME, u.getClientName())
++          .o(INODE_SECTION_CLIENT_MACHINE, u.getClientMachine());
++      out.print("</" + INODE_SECTION_FILE_UNDER_CONSTRUCTION + ">\n");
+     }
+   }
+ 
+@@ -349,31 +509,31 @@ private void dumpAcls(AclFeatureProto aclFeatureProto) {
+     ImmutableList<AclEntry> aclEntryList = FSImageFormatPBINode.Loader
+         .loadAclEntries(aclFeatureProto, stringTable);
+     if (aclEntryList.size() > 0) {
+-      out.print("<acls>");
++      out.print("<" + INODE_SECTION_ACLS + ">");
+       for (AclEntry aclEntry : aclEntryList) {
+-        o("acl", aclEntry.toString());
++        o(INODE_SECTION_ACL, aclEntry.toString());
+       }
+-      out.print("</acls>");
++      out.print("</" + INODE_SECTION_ACLS + ">");
+     }
+   }
+ 
+   private void dumpINodeSection(InputStream in) throws IOException {
+     INodeSection s = INodeSection.parseDelimitedFrom(in);
+-    out.print("<INodeSection>");
+-    o("lastInodeId", s.getLastInodeId());
+-    o("numInodes", s.getNumInodes());
++    out.print("<" + INODE_SECTION_NAME + ">");
++    o(INODE_SECTION_LAST_INODE_ID, s.getLastInodeId());
++    o(INODE_SECTION_NUM_INODES, s.getNumInodes());
+     for (int i = 0; i < s.getNumInodes(); ++i) {
+       INodeSection.INode p = INodeSection.INode.parseDelimitedFrom(in);
+-      out.print("<inode>");
++      out.print("<" + INODE_SECTION_INODE + ">");
+       dumpINodeFields(p);
+-      out.print("</inode>\n");
++      out.print("</" + INODE_SECTION_INODE + ">\n");
+     }
+-    out.print("</INodeSection>\n");
++    out.print("</" + INODE_SECTION_NAME + ">\n");
+   }
+ 
+   private void dumpINodeFields(INodeSection.INode p) {
+-    o("id", p.getId()).o("type", p.getType()).o("name",
+-        p.getName().toStringUtf8());
++    o(SECTION_ID, p.getId()).o(INODE_SECTION_TYPE, p.getType())
++            .o(SECTION_NAME, p.getName().toStringUtf8());
+     if (p.hasFile()) {
+       dumpINodeFile(p.getFile());
+     } else if (p.hasDirectory()) {
+@@ -384,20 +544,23 @@ private void dumpINodeFields(INodeSection.INode p) {
+   }
+ 
+   private void dumpINodeSymlink(INodeSymlink s) {
+-    o("permission", dumpPermission(s.getPermission()))
+-        .o("target", s.getTarget().toStringUtf8())
+-        .o("mtime", s.getModificationTime()).o("atime", s.getAccessTime());
++    o(INODE_SECTION_PERMISSION, dumpPermission(s.getPermission()))
++        .o(INODE_SECTION_TARGET, s.getTarget().toStringUtf8())
++        .o(INODE_SECTION_MTIME, s.getModificationTime())
++        .o(INODE_SECTION_ATIME, s.getAccessTime());
+   }
+ 
+   private void dumpNameSection(InputStream in) throws IOException {
+     NameSystemSection s = NameSystemSection.parseDelimitedFrom(in);
+-    out.print("<NameSection>");
+-    o("namespaceId", s.getNamespaceId());
+-    o("genstampV1", s.getGenstampV1()).o("genstampV2", s.getGenstampV2())
+-        .o("genstampV1Limit", s.getGenstampV1Limit())
+-        .o("lastAllocatedBlockId", s.getLastAllocatedBlockId())
+-        .o("txid", s.getTransactionId());
+-    out.print("</NameSection>\n");
++    out.print("<" + NAME_SECTION_NAME + ">");
++    o(NAME_SECTION_NAMESPACE_ID, s.getNamespaceId());
++    o(NAME_SECTION_GENSTAMPV1, s.getGenstampV1())
++        .o(NAME_SECTION_GENSTAMPV2, s.getGenstampV2())
++        .o(NAME_SECTION_GENSTAMPV1_LIMIT, s.getGenstampV1Limit())
++        .o(NAME_SECTION_LAST_ALLOCATED_BLOCK_ID,
++            s.getLastAllocatedBlockId())
++        .o(NAME_SECTION_TXID, s.getTransactionId());
++    out.print("</" + NAME_SECTION_NAME + ">\n");
+   }
+ 
+   private String dumpPermission(long permission) {
+@@ -408,59 +571,63 @@ private String dumpPermission(long permission) {
+   }
+ 
+   private void dumpSecretManagerSection(InputStream is) throws IOException {
+-    out.print("<SecretManagerSection>");
++    out.print("<" + SECRET_MANAGER_SECTION_NAME + ">");
+     SecretManagerSection s = SecretManagerSection.parseDelimitedFrom(is);
+     int expectedNumDelegationKeys = s.getNumKeys();
+     int expectedNumTokens = s.getNumTokens();
+-    o("currentId", s.getCurrentId()).o("tokenSequenceNumber",
+-        s.getTokenSequenceNumber()).
+-        o("numDelegationKeys", expectedNumDelegationKeys).
+-        o("numTokens", expectedNumTokens);
++    o(SECRET_MANAGER_SECTION_CURRENT_ID, s.getCurrentId())
++        .o(SECRET_MANAGER_SECTION_TOKEN_SEQUENCE_NUMBER,
++            s.getTokenSequenceNumber()).
++        o(SECRET_MANAGER_SECTION_NUM_DELEGATION_KEYS,
++            expectedNumDelegationKeys).
++        o(SECRET_MANAGER_SECTION_NUM_TOKENS, expectedNumTokens);
+     for (int i = 0; i < expectedNumDelegationKeys; i++) {
+       SecretManagerSection.DelegationKey dkey =
+           SecretManagerSection.DelegationKey.parseDelimitedFrom(is);
+-      out.print("<delegationKey>");
+-      o("id", dkey.getId());
+-      o("key", Hex.encodeHexString(dkey.getKey().toByteArray()));
++      out.print("<" + SECRET_MANAGER_SECTION_DELEGATION_KEY + ">");
++      o(SECTION_ID, dkey.getId());
++      o(SECRET_MANAGER_SECTION_KEY,
++          Hex.encodeHexString(dkey.getKey().toByteArray()));
+       if (dkey.hasExpiryDate()) {
+-        dumpDate("expiry", dkey.getExpiryDate());
++        dumpDate(SECRET_MANAGER_SECTION_EXPIRY, dkey.getExpiryDate());
+       }
+-      out.print("</delegationKey>");
++      out.print("</" + SECRET_MANAGER_SECTION_DELEGATION_KEY + ">");
+     }
+     for (int i = 0; i < expectedNumTokens; i++) {
+       SecretManagerSection.PersistToken token =
+           SecretManagerSection.PersistToken.parseDelimitedFrom(is);
+-      out.print("<token>");
++      out.print("<" + SECRET_MANAGER_SECTION_TOKEN + ">");
+       if (token.hasVersion()) {
+-        o("version", token.getVersion());
++        o(SECRET_MANAGER_SECTION_VERSION, token.getVersion());
+       }
+       if (token.hasOwner()) {
+-        o("owner", token.getOwner());
++        o(SECRET_MANAGER_SECTION_OWNER, token.getOwner());
+       }
+       if (token.hasRenewer()) {
+-        o("renewer", token.getRenewer());
++        o(SECRET_MANAGER_SECTION_RENEWER, token.getRenewer());
+       }
+       if (token.hasRealUser()) {
+-        o("realUser", token.getRealUser());
++        o(SECRET_MANAGER_SECTION_REAL_USER, token.getRealUser());
+       }
+       if (token.hasIssueDate()) {
+-        dumpDate("issueDate", token.getIssueDate());
++        dumpDate(SECRET_MANAGER_SECTION_ISSUE_DATE, token.getIssueDate());
+       }
+       if (token.hasMaxDate()) {
+-        dumpDate("maxDate", token.getMaxDate());
++        dumpDate(SECRET_MANAGER_SECTION_MAX_DATE, token.getMaxDate());
+       }
+       if (token.hasSequenceNumber()) {
+-        o("sequenceNumber", token.getSequenceNumber());
++        o(SECRET_MANAGER_SECTION_SEQUENCE_NUMBER,
++            token.getSequenceNumber());
+       }
+       if (token.hasMasterKeyId()) {
+-        o("masterKeyId", token.getMasterKeyId());
++        o(SECRET_MANAGER_SECTION_MASTER_KEY_ID, token.getMasterKeyId());
+       }
+       if (token.hasExpiryDate()) {
+-        dumpDate("expiryDate", token.getExpiryDate());
++        dumpDate(SECRET_MANAGER_SECTION_EXPIRY_DATE, token.getExpiryDate());
+       }
+-      out.print("</token>");
++      out.print("</" + SECRET_MANAGER_SECTION_TOKEN + ">");
+     }
+-    out.print("</SecretManagerSection>");
++    out.print("</" + SECRET_MANAGER_SECTION_NAME + ">");
+   }
+ 
+   private void dumpDate(String tag, long date) {
+@@ -469,7 +636,7 @@ private void dumpDate(String tag, long date) {
+   }
+ 
+   private void dumpSnapshotDiffSection(InputStream in) throws IOException {
+-    out.print("<SnapshotDiffSection>");
++    out.print("<" + SNAPSHOT_DIFF_SECTION_NAME + ">");
+     while (true) {
+       SnapshotDiffSection.DiffEntry e = SnapshotDiffSection.DiffEntry
+           .parseDelimitedFrom(in);
+@@ -478,52 +645,54 @@ private void dumpSnapshotDiffSection(InputStream in) throws IOException {
+       }
+       switch (e.getType()) {
+       case FILEDIFF:
+-        out.print("<fileDiffEntry>");
++        out.print("<" + SNAPSHOT_DIFF_SECTION_FILE_DIFF_ENTRY + ">");
+         break;
+       case DIRECTORYDIFF:
+-        out.print("<dirDiffEntry>");
++        out.print("<" + SNAPSHOT_DIFF_SECTION_DIR_DIFF_ENTRY + ">");
+         break;
+       default:
+         throw new IOException("unknown DiffEntry type " + e.getType());
+       }
+-      o("inodeId", e.getInodeId());
+-      o("count", e.getNumOfDiff());
++      o(SNAPSHOT_DIFF_SECTION_INODE_ID, e.getInodeId());
++      o(SNAPSHOT_DIFF_SECTION_COUNT, e.getNumOfDiff());
+       switch (e.getType()) {
+       case FILEDIFF: {
+         for (int i = 0; i < e.getNumOfDiff(); ++i) {
+-          out.print("<fileDiff>");
++          out.print("<" + SNAPSHOT_DIFF_SECTION_FILE_DIFF + ">");
+           SnapshotDiffSection.FileDiff f = SnapshotDiffSection.FileDiff
+               .parseDelimitedFrom(in);
+-          o("snapshotId", f.getSnapshotId()).o("size", f.getFileSize()).o(
+-              "name", f.getName().toStringUtf8());
+-          out.print("</fileDiff>\n");
++          o(SNAPSHOT_DIFF_SECTION_SNAPSHOT_ID, f.getSnapshotId())
++              .o(SNAPSHOT_DIFF_SECTION_SIZE, f.getFileSize())
++              .o(SECTION_NAME, f.getName().toStringUtf8());
++          out.print("</" + SNAPSHOT_DIFF_SECTION_FILE_DIFF + ">\n");
+         }
+       }
+         break;
+       case DIRECTORYDIFF: {
+         for (int i = 0; i < e.getNumOfDiff(); ++i) {
+-          out.print("<dirDiff>");
++          out.print("<" + SNAPSHOT_DIFF_SECTION_DIR_DIFF + ">");
+           SnapshotDiffSection.DirectoryDiff d = SnapshotDiffSection.DirectoryDiff
+               .parseDelimitedFrom(in);
+-          o("snapshotId", d.getSnapshotId())
+-              .o("childrenSize", d.getChildrenSize())
+-              .o("isSnapshotRoot", d.getIsSnapshotRoot())
+-              .o("name", d.getName().toStringUtf8())
+-              .o("createdListSize", d.getCreatedListSize());
++          o(SNAPSHOT_DIFF_SECTION_SNAPSHOT_ID, d.getSnapshotId())
++              .o(SNAPSHOT_DIFF_SECTION_CHILDREN_SIZE, d.getChildrenSize())
++              .o(SNAPSHOT_DIFF_SECTION_IS_SNAPSHOT_ROOT, d.getIsSnapshotRoot())
++              .o(SECTION_NAME, d.getName().toStringUtf8())
++              .o(SNAPSHOT_DIFF_SECTION_CREATED_LIST_SIZE,
++                  d.getCreatedListSize());
+           for (long did : d.getDeletedINodeList()) {
+-            o("deletedInode", did);
++            o(SNAPSHOT_DIFF_SECTION_DELETED_INODE, did);
+           }
+           for (int dRefid : d.getDeletedINodeRefList()) {
+-            o("deletedInoderef", dRefid);
++            o(SNAPSHOT_DIFF_SECTION_DELETED_INODE_REF, dRefid);
+           }
+           for (int j = 0; j < d.getCreatedListSize(); ++j) {
+             SnapshotDiffSection.CreatedListEntry ce = SnapshotDiffSection.CreatedListEntry
+                 .parseDelimitedFrom(in);
+-            out.print("<created>");
+-            o("name", ce.getName().toStringUtf8());
+-            out.print("</created>\n");
++            out.print("<" + SNAPSHOT_DIFF_SECTION_CREATED + ">");
++            o(SECTION_NAME, ce.getName().toStringUtf8());
++            out.print("</" + SNAPSHOT_DIFF_SECTION_CREATED + ">\n");
+           }
+-          out.print("</dirDiff>\n");
++          out.print("</" + SNAPSHOT_DIFF_SECTION_DIR_DIFF + ">\n");
+         }
+         break;
+       }
+@@ -532,41 +701,41 @@ private void dumpSnapshotDiffSection(InputStream in) throws IOException {
+       }
+       switch (e.getType()) {
+       case FILEDIFF:
+-        out.print("</fileDiffEntry>");
++        out.print("</" + SNAPSHOT_DIFF_SECTION_FILE_DIFF_ENTRY + ">");
+         break;
+       case DIRECTORYDIFF:
+-        out.print("</dirDiffEntry>");
++        out.print("</" + SNAPSHOT_DIFF_SECTION_DIR_DIFF_ENTRY + ">");
+         break;
+       default:
+         throw new IOException("unknown DiffEntry type " + e.getType());
+       }
+     }
+-    out.print("</SnapshotDiffSection>\n");
++    out.print("</" + SNAPSHOT_DIFF_SECTION_NAME + ">\n");
+   }
+ 
+   private void dumpSnapshotSection(InputStream in) throws IOException {
+-    out.print("<SnapshotSection>");
++    out.print("<" + SNAPSHOT_SECTION_NAME + ">");
+     SnapshotSection s = SnapshotSection.parseDelimitedFrom(in);
+-    o("snapshotCounter", s.getSnapshotCounter());
+-    o("numSnapshots", s.getNumSnapshots());
++    o(SNAPSHOT_SECTION_SNAPSHOT_COUNTER, s.getSnapshotCounter());
++    o(SNAPSHOT_SECTION_NUM_SNAPSHOTS, s.getNumSnapshots());
+     if (s.getSnapshottableDirCount() > 0) {
+-      out.print("<snapshottableDir>");
++      out.print("<" + SNAPSHOT_SECTION_SNAPSHOT_TABLE_DIR + ">");
+       for (long id : s.getSnapshottableDirList()) {
+-        o("dir", id);
++        o(SNAPSHOT_SECTION_DIR, id);
+       }
+-      out.print("</snapshottableDir>\n");
++      out.print("</" + SNAPSHOT_SECTION_SNAPSHOT_TABLE_DIR + ">\n");
+     }
+     for (int i = 0; i < s.getNumSnapshots(); ++i) {
+       SnapshotSection.Snapshot pbs = SnapshotSection.Snapshot
+           .parseDelimitedFrom(in);
+-      out.print("<snapshot>");
+-      o("id", pbs.getSnapshotId());
+-      out.print("<root>");
++      out.print("<" + SNAPSHOT_SECTION_SNAPSHOT + ">");
++      o(SECTION_ID, pbs.getSnapshotId());
++      out.print("<" + SNAPSHOT_SECTION_ROOT + ">");
+       dumpINodeFields(pbs.getRoot());
+-      out.print("</root>");
+-      out.print("</snapshot>");
++      out.print("</" + SNAPSHOT_SECTION_ROOT + ">");
++      out.print("</" + SNAPSHOT_SECTION_SNAPSHOT + ">");
+     }
+-    out.print("</SnapshotSection>\n");
++    out.print("</" + SNAPSHOT_SECTION_NAME + ">\n");
+   }
+ 
+   private void loadStringTable(InputStream in) throws IOException {
