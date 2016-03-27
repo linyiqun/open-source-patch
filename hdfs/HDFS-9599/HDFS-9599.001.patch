@@ -1,0 +1,75 @@
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestDecommissioningStatus.java hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestDecommissioningStatus.java
+index 789ee6f..3529f19 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestDecommissioningStatus.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestDecommissioningStatus.java
+@@ -105,12 +105,21 @@ public static void setUp() throws Exception {
+     writeConfigFile(localFileSys, excludeFile, null);
+     writeConfigFile(localFileSys, includeFile, null);
+ 
+-    cluster = new MiniDFSCluster.Builder(conf).numDataNodes(numDatanodes).build();
++    Logger.getLogger(DecommissionManager.class).setLevel(Level.DEBUG);
++  }
++
++  /**
++   * Start a MiniDFSCluster
++   *
++   * @throws IOException
++   */
++  private void startCluster() throws IOException {
++    cluster =
++        new MiniDFSCluster.Builder(conf).numDataNodes(numDatanodes).build();
+     cluster.waitActive();
+     fileSys = cluster.getFileSystem();
+     cluster.getNamesystem().getBlockManager().getDatanodeManager()
+         .setHeartbeatExpireInterval(3000);
+-    Logger.getLogger(DecommissionManager.class).setLevel(Level.DEBUG);
+   }
+ 
+   @AfterClass
+@@ -255,6 +264,7 @@ private void checkDFSAdminDecommissionStatus(
+    */
+   @Test
+   public void testDecommissionStatus() throws Exception {
++    startCluster();
+     InetSocketAddress addr = new InetSocketAddress("localhost", cluster
+         .getNameNodePort());
+     DFSClient client = new DFSClient(addr, conf);
+@@ -312,6 +322,7 @@ public void testDecommissionStatus() throws Exception {
+     st1.close();
+     cleanupFile(fileSys, file1);
+     cleanupFile(fileSys, file2);
++    cluster.shutdown();
+   }
+ 
+   /**
+@@ -321,6 +332,7 @@ public void testDecommissionStatus() throws Exception {
+    */
+   @Test(timeout=120000)
+   public void testDecommissionStatusAfterDNRestart() throws Exception {
++    startCluster();
+     DistributedFileSystem fileSys =
+         (DistributedFileSystem)cluster.getFileSystem();
+ 
+@@ -386,6 +398,7 @@ public void testDecommissionStatusAfterDNRestart() throws Exception {
+     // make them available again.
+     writeConfigFile(localFileSys, excludeFile, null);
+     dm.refreshNodes(conf);
++    cluster.shutdown();
+   }
+ 
+   /**
+@@ -395,6 +408,7 @@ public void testDecommissionStatusAfterDNRestart() throws Exception {
+    */
+   @Test(timeout=120000)
+   public void testDecommissionDeadDN() throws Exception {
++    startCluster();
+     Logger log = Logger.getLogger(DecommissionManager.class);
+     log.setLevel(Level.DEBUG);
+     DatanodeID dnID = cluster.getDataNodes().get(0).getDatanodeId();
+@@ -418,5 +432,6 @@ public void testDecommissionDeadDN() throws Exception {
+     // datanode from decommissioning list and make it available again.
+     writeConfigFile(localFileSys, excludeFile, null);
+     dm.refreshNodes(conf);
++    cluster.shutdown();
+   }
+ }
