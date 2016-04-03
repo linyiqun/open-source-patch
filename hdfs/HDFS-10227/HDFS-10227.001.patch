@@ -1,0 +1,115 @@
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
+index 66ab789..d28b009 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
+@@ -1895,6 +1895,8 @@ private boolean validateReconstructionWork(BlockReconstructionWork rw) {
+    */
+   private void processPendingReplications() {
+     BlockInfo[] timedOutItems = pendingReplications.getTimedOutBlocks();
++    Map<Block, List<DatanodeDescriptor>> timedOutBlocks2Targets =
++        pendingReplications.getTimedOutBlocks2Targets();
+     if (timedOutItems != null) {
+       namesystem.writeLock();
+       try {
+@@ -1920,6 +1922,19 @@ private void processPendingReplications() {
+       /* If we know the target datanodes where the replication timedout,
+        * we could invoke decBlocksScheduled() on it. Its ok for now.
+        */
++      Block block;
++      List<DatanodeDescriptor> timedoutTargets;
++      for (Map.Entry<Block, List<DatanodeDescriptor>> entry : timedOutBlocks2Targets
++          .entrySet()) {
++        block = entry.getKey();
++        timedoutTargets = entry.getValue();
++
++        for (DatanodeDescriptor target : timedoutTargets) {
++          for (DatanodeStorageInfo s : blocksMap.getStorages(block)) {
++            target.decrementBlocksScheduled(s.getStorageType());
++          }
++        }
++      }
+     }
+   }
+ 
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/PendingReplicationBlocks.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/PendingReplicationBlocks.java
+index 71939de..a8d74e6 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/PendingReplicationBlocks.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/PendingReplicationBlocks.java
+@@ -47,7 +47,7 @@
+   private static final Logger LOG = BlockManager.LOG;
+ 
+   private final Map<BlockInfo, PendingBlockInfo> pendingReplications;
+-  private final ArrayList<BlockInfo> timedOutItems;
++  private final Map<Block, List<DatanodeDescriptor>> timedOutBlock2Targets;
+   Daemon timerThread = null;
+   private volatile boolean fsRunning = true;
+ 
+@@ -63,7 +63,7 @@
+       this.timeout = timeoutPeriod;
+     }
+     pendingReplications = new HashMap<>();
+-    timedOutItems = new ArrayList<>();
++    timedOutBlock2Targets = new HashMap<Block, List<DatanodeDescriptor>>();
+   }
+ 
+   void start() {
+@@ -124,7 +124,7 @@ void remove(BlockInfo block) {
+   public void clear() {
+     synchronized (pendingReplications) {
+       pendingReplications.clear();
+-      timedOutItems.clear();
++      timedOutBlock2Targets.clear();
+     }
+   }
+ 
+@@ -154,13 +154,14 @@ int getNumReplicas(BlockInfo block) {
+    * timed out.
+    */
+   BlockInfo[] getTimedOutBlocks() {
+-    synchronized (timedOutItems) {
+-      if (timedOutItems.size() <= 0) {
++    synchronized (timedOutBlock2Targets) {
++      if (timedOutBlock2Targets.size() <= 0) {
+         return null;
+       }
+-      BlockInfo[] blockList = timedOutItems.toArray(
+-          new BlockInfo[timedOutItems.size()]);
+-      timedOutItems.clear();
++      Block[] blockList =
++          timedOutBlock2Targets.keySet().toArray(
++              new Block[timedOutBlock2Targets.size()]);
++      timedOutBlock2Targets.clear();
+       return blockList;
+     }
+   }
+@@ -207,6 +208,10 @@ void decrementReplicas(DatanodeDescriptor dn) {
+     int getNumReplicas() {
+       return targets.size();
+     }
++
++    List<DatanodeDescriptor> getTargets(){
++      return targets;
++    }
+   }
+ 
+   /*
+@@ -245,8 +250,8 @@ void pendingReplicationCheck() {
+           PendingBlockInfo pendingBlock = entry.getValue();
+           if (now > pendingBlock.getTimeStamp() + timeout) {
+             BlockInfo block = entry.getKey();
+-            synchronized (timedOutItems) {
+-              timedOutItems.add(block);
++            synchronized (timedOutBlock2Targets) {
++              timedOutBlock2Targets.put(block, pendingBlock.getTargets());
+             }
+             LOG.warn("PendingReplicationMonitor timed out " + block);
+             iter.remove();
+@@ -288,4 +293,8 @@ void metaSave(PrintWriter out) {
+       }
+     }
+   }
++
++  public Map<Block, List<DatanodeDescriptor>> getTimedOutBlocks2Targets() {
++    return timedOutBlock2Targets;
++  }
+ }
