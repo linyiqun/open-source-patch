@@ -1,0 +1,130 @@
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DNConf.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DNConf.java
+index 5cff2d3..b616414 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DNConf.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DNConf.java
+@@ -114,6 +114,9 @@
+   // Allow LAZY_PERSIST writes from non-local clients?
+   private final boolean allowNonLocalLazyPersist;
+ 
++  private final int volFailuresTolerated;
++  private final int volsConfigured;
++
+   public DNConf(Configuration conf) {
+     this.conf = conf;
+     socketTimeout = conf.getInt(DFS_CLIENT_SOCKET_TIMEOUT_KEY,
+@@ -238,6 +241,13 @@ public DNConf(Configuration conf) {
+     this.bpReadyTimeout = conf.getLong(
+         DFS_DATANODE_BP_READY_TIMEOUT_KEY,
+         DFS_DATANODE_BP_READY_TIMEOUT_DEFAULT);
++
++    this.volFailuresTolerated =
++        conf.getInt(DFSConfigKeys.DFS_DATANODE_FAILED_VOLUMES_TOLERATED_KEY,
++            DFSConfigKeys.DFS_DATANODE_FAILED_VOLUMES_TOLERATED_DEFAULT);
++    String[] dataDirs =
++        conf.getTrimmedStrings(DFSConfigKeys.DFS_DATANODE_DATA_DIR_KEY);
++    this.volsConfigured = (dataDirs == null) ? 0 : dataDirs.length;
+   }
+ 
+   // We get minimumNameNodeVersion via a method so it can be mocked out in tests.
+@@ -363,4 +373,12 @@ public long getBpReadyTimeout() {
+   public long getLifelineIntervalMs() {
+     return lifelineIntervalMs;
+   }
++
++  public int getVolFailuresTolerated() {
++    return volFailuresTolerated;
++  }
++
++  public int getVolsConfigured() {
++    return volsConfigured;
++  }
+ }
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java
+index 625eb3f..288fc3e 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java
+@@ -1268,6 +1268,15 @@ void startDataNode(Configuration conf,
+     LOG.info("Starting DataNode with maxLockedMemory = " +
+         dnConf.maxLockedMemory);
+ 
++    int volFailuresTolerated = dnConf.getVolFailuresTolerated();
++    int volsConfigured = dnConf.getVolsConfigured();
++    if (volFailuresTolerated < 0 || volFailuresTolerated >= volsConfigured) {
++      throw new DiskErrorException("Invalid value configured for "
++          + "dfs.datanode.failed.volumes.tolerated - " + volFailuresTolerated
++          + ". Value configured is either less than 0 or >= "
++          + "to the number of configured volumes (" + volsConfigured + ").");
++    }
++
+     storage = new DataStorage();
+     
+     // global DN settings
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsDatasetImpl.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsDatasetImpl.java
+index 381c799..f7e0aae 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsDatasetImpl.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsDatasetImpl.java
+@@ -268,24 +268,15 @@ public LengthInputStream getMetaDataInputStream(ExtendedBlock b)
+     this.smallBufferSize = DFSUtilClient.getSmallBufferSize(conf);
+     // The number of volumes required for operation is the total number
+     // of volumes minus the number of failed volumes we can tolerate.
+-    volFailuresTolerated =
+-      conf.getInt(DFSConfigKeys.DFS_DATANODE_FAILED_VOLUMES_TOLERATED_KEY,
+-                  DFSConfigKeys.DFS_DATANODE_FAILED_VOLUMES_TOLERATED_DEFAULT);
++    volFailuresTolerated = datanode.getDnConf().getVolFailuresTolerated();
+ 
+-    String[] dataDirs = conf.getTrimmedStrings(DFSConfigKeys.DFS_DATANODE_DATA_DIR_KEY);
+     Collection<StorageLocation> dataLocations = DataNode.getStorageLocations(conf);
+     List<VolumeFailureInfo> volumeFailureInfos = getInitialVolumeFailureInfos(
+         dataLocations, storage);
+ 
+-    int volsConfigured = (dataDirs == null) ? 0 : dataDirs.length;
++    int volsConfigured = datanode.getDnConf().getVolsConfigured();
+     int volsFailed = volumeFailureInfos.size();
+ 
+-    if (volFailuresTolerated < 0 || volFailuresTolerated >= volsConfigured) {
+-      throw new DiskErrorException("Invalid value configured for "
+-          + "dfs.datanode.failed.volumes.tolerated - " + volFailuresTolerated
+-          + ". Value configured is either less than 0 or >= "
+-          + "to the number of configured volumes (" + volsConfigured + ").");
+-    }
+     if (volsFailed > volFailuresTolerated) {
+       throw new DiskErrorException("Too many failed volumes - "
+           + "current valid volumes: " + storage.getNumStorageDirs() 
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestDataNodeVolumeFailureToleration.java hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestDataNodeVolumeFailureToleration.java
+index 1eb8bca..2f8239e 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestDataNodeVolumeFailureToleration.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestDataNodeVolumeFailureToleration.java
+@@ -34,6 +34,8 @@
+ import org.apache.hadoop.hdfs.HdfsConfiguration;
+ import org.apache.hadoop.hdfs.MiniDFSCluster;
+ import org.apache.hadoop.hdfs.server.blockmanagement.DatanodeManager;
++import org.apache.hadoop.test.GenericTestUtils;
++import org.apache.hadoop.util.DiskChecker.DiskErrorException;
+ import org.junit.After;
+ import org.junit.Before;
+ import org.junit.Test;
+@@ -229,9 +231,22 @@ private void testVolumeConfig(int volumesTolerated, int volumesFailed,
+         prepareDirToFail(dirs[i]);
+       }
+       restartDatanodes(volumesTolerated, manageDfsDirs);
+-      assertEquals(expectedBPServiceState, cluster.getDataNodes().get(0)
+-          .isBPServiceAlive(cluster.getNamesystem().getBlockPoolId()));
++    } catch (DiskErrorException e) {
++      GenericTestUtils.assertExceptionContains("Invalid value configured for "
++          + "dfs.datanode.failed.volumes.tolerated", e);
+     } finally {
++      boolean bpServiceState;
++      // If the datanode not registered successfully,
++      // because the invalid value configured for tolerated volumes
++      if (cluster.getDataNodes().size() == 0) {
++        bpServiceState = false;
++      } else {
++        bpServiceState =
++            cluster.getDataNodes().get(0)
++                    .isBPServiceAlive(cluster.getNamesystem().getBlockPoolId());
++      }
++      assertEquals(expectedBPServiceState, bpServiceState);
++
+       for (File dir : dirs) {
+         FileUtil.chmod(dir.toString(), "755");
+       }
