@@ -1,0 +1,29 @@
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsDatasetImpl.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsDatasetImpl.java
+index 240345c..b91234a 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsDatasetImpl.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsDatasetImpl.java
+@@ -237,7 +237,7 @@ public LengthInputStream getMetaDataInputStream(ExtendedBlock b)
+   final Daemon lazyWriter;
+   final FsDatasetCache cacheManager;
+   private final Configuration conf;
+-  private final int volFailuresTolerated;
++  private int volFailuresTolerated;
+   private volatile boolean fsRunning;
+ 
+   final ReplicaMap volumeMap;
+@@ -281,10 +281,13 @@ public LengthInputStream getMetaDataInputStream(ExtendedBlock b)
+     int volsFailed = volumeFailureInfos.size();
+ 
+     if (volFailuresTolerated < 0 || volFailuresTolerated >= volsConfigured) {
+-      throw new DiskErrorException("Invalid value configured for "
++      LOG.warn("Invalid value configured for "
+           + "dfs.datanode.failed.volumes.tolerated - " + volFailuresTolerated
+           + ". Value configured is either less than 0 or >= "
+-          + "to the number of configured volumes (" + volsConfigured + ").");
++          + "to the number of configured volumes (" + volsConfigured + ")."
++          + " Set the number of configured volumes to default value.");
++      volFailuresTolerated =
++          DFSConfigKeys.DFS_DATANODE_FAILED_VOLUMES_TOLERATED_DEFAULT;
+     }
+     if (volsFailed > volFailuresTolerated) {
+       throw new DiskErrorException("Too many failed volumes - "
