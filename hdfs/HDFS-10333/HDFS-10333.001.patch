@@ -1,0 +1,22 @@
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestFileAppend.java hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestFileAppend.java
+index 2768d21..3e8561f 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestFileAppend.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestFileAppend.java
+@@ -38,6 +38,7 @@
+ import org.apache.hadoop.fs.HardLink;
+ import org.apache.hadoop.fs.Path;
+ import org.apache.hadoop.hdfs.MiniDFSCluster.DataNodeProperties;
++import org.apache.hadoop.hdfs.client.HdfsClientConfigKeys;
+ import org.apache.hadoop.hdfs.protocol.AlreadyBeingCreatedException;
+ import org.apache.hadoop.hdfs.protocol.ExtendedBlock;
+ import org.apache.hadoop.hdfs.protocol.LocatedBlock;
+@@ -371,6 +372,9 @@ public void testMultipleAppends() throws Exception {
+     final Configuration conf = new HdfsConfiguration();
+     conf.setInt(
+         DFSConfigKeys.DFS_NAMENODE_FILE_CLOSE_NUM_COMMITTED_ALLOWED_KEY, 1);
++    conf.setBoolean(
++        HdfsClientConfigKeys.BlockWrite.ReplaceDatanodeOnFailure.ENABLE_KEY,
++        false);
+ 
+     final MiniDFSCluster cluster = new MiniDFSCluster.Builder(conf)
+         .numDataNodes(4).build();
