@@ -1,0 +1,113 @@
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/DFSAdmin.java hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/DFSAdmin.java
+index 45c4952..7fc407a 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/DFSAdmin.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/DFSAdmin.java
+@@ -421,7 +421,8 @@ static int run(DistributedFileSystem dfs, String[] argv, int idx) throws IOExcep
+     "\t[-printTopology]\n" +
+     "\t[-refreshNamenodes datanode_host:ipc_port]\n"+
+     "\t[-deleteBlockPool datanode_host:ipc_port blockpoolId [force]]\n"+
+-    "\t[-setBalancerBandwidth <bandwidth in bytes per second>]\n" +
++    "\t[-setBalancerBandwidth <bandwidth in bytes per second "
++    + "or specified with a binary prefix>]\n" +
+     "\t[-getBalancerBandwidth <datanode_host:ipc_port>]\n" +
+     "\t[-fetchImage <local directory>]\n" +
+     "\t[-allowSnapshot <snapshotDir>]\n" +
+@@ -864,11 +865,12 @@ public int setBalancerBandwidth(String[] argv, int idx) throws IOException {
+     int exitCode = -1;
+ 
+     try {
+-      bandwidth = Long.parseLong(argv[idx]);
++      bandwidth = StringUtils.TraditionalBinaryPrefix.string2long(argv[idx]);
+     } catch (NumberFormatException nfe) {
+       System.err.println("NumberFormatException: " + nfe.getMessage());
+       System.err.println("Usage: hdfs dfsadmin"
+-                  + " [-setBalancerBandwidth <bandwidth in bytes per second>]");
++          + " [-setBalancerBandwidth <bandwidth in bytes per second "
++          + "or specified with a binary prefix>]");
+       return exitCode;
+     }
+ 
+@@ -1062,7 +1064,9 @@ private void printHelp(String cmd) {
+     String setBalancerBandwidth = "-setBalancerBandwidth <bandwidth>:\n" +
+       "\tChanges the network bandwidth used by each datanode during\n" +
+       "\tHDFS block balancing.\n\n" +
+-      "\t\t<bandwidth> is the maximum number of bytes per second\n" +
++      "\t\t<bandwidth> is the maximum number of bytes per second,\n" +
++      "\t\tbandwidth can be specified with a binary prefix for terabytes,\n" +
++      "\t\tpetabytes etc (e.g. 50t is 50TB, 5m is 5MB, 3p is 3PB).\n" +
+       "\t\tthat will be used by each datanode. This value overrides\n" +
+       "\t\tthe dfs.balance.bandwidthPerSec parameter.\n\n" +
+       "\t\t--- NOTE: The new value is not persistent on the DataNode.---\n";
+@@ -1820,7 +1824,8 @@ private static void printUsage(String cmd) {
+           + " [-deleteBlockPool datanode-host:port blockpoolId [force]]");
+     } else if ("-setBalancerBandwidth".equals(cmd)) {
+       System.err.println("Usage: hdfs dfsadmin"
+-                  + " [-setBalancerBandwidth <bandwidth in bytes per second>]");
++          + " [-setBalancerBandwidth <bandwidth in bytes per second "
++          + "or specified with a binary prefix>]");
+     } else if ("-getBalancerBandwidth".equalsIgnoreCase(cmd)) {
+       System.err.println("Usage: hdfs dfsadmin"
+           + " [-getBalancerBandwidth <datanode_host:ipc_port>]");
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/site/markdown/HDFSCommands.md hadoop-hdfs-project/hadoop-hdfs/src/site/markdown/HDFSCommands.md
+index 7c94e92..183c247 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/site/markdown/HDFSCommands.md
++++ hadoop-hdfs-project/hadoop-hdfs/src/site/markdown/HDFSCommands.md
+@@ -380,7 +380,7 @@ Usage:
+         hdfs dfsadmin [-printTopology]
+         hdfs dfsadmin [-refreshNamenodes datanodehost:port]
+         hdfs dfsadmin [-deleteBlockPool datanode-host:port blockpoolId [force]]
+-        hdfs dfsadmin [-setBalancerBandwidth <bandwidth in bytes per second>]
++        hdfs dfsadmin [-setBalancerBandwidth <bandwidth in bytes per second or specified with a binary prefix>]
+         hdfs dfsadmin [-getBalancerBandwidth <datanode_host:ipc_port>]
+         hdfs dfsadmin [-fetchImage <local directory>]
+         hdfs dfsadmin [-allowSnapshot <snapshotDir>]
+@@ -415,7 +415,7 @@ Usage:
+ | `-printTopology` | Print a tree of the racks and their nodes as reported by the Namenode |
+ | `-refreshNamenodes` datanodehost:port | For the given datanode, reloads the configuration files, stops serving the removed block-pools and starts serving new block-pools. |
+ | `-deleteBlockPool` datanode-host:port blockpoolId [force] | If force is passed, block pool directory for the given blockpool id on the given datanode is deleted along with its contents, otherwise the directory is deleted only if it is empty. The command will fail if datanode is still serving the block pool. Refer to refreshNamenodes to shutdown a block pool service on a datanode. |
+-| `-setBalancerBandwidth` \<bandwidth in bytes per second\> | Changes the network bandwidth used by each datanode during HDFS block balancing. \<bandwidth\> is the maximum number of bytes per second that will be used by each datanode. This value overrides the dfs.balance.bandwidthPerSec parameter. NOTE: The new value is not persistent on the DataNode. |
++| `-setBalancerBandwidth` \<bandwidth in bytes per second\> | Changes the network bandwidth used by each datanode during HDFS block balancing. \<bandwidth\> is the maximum number of bytes per second that will be used by each datanode. The bandwidth can be specified with a binary prefix for terabytes, petabytes etc (e.g. 50t is 50TB, 5m is 5MB, 3p is 3PB). This value overrides the dfs.balance.bandwidthPerSec parameter. NOTE: The new value is not persistent on the DataNode. |
+ | `-getBalancerBandwidth` \<datanode\_host:ipc\_port\> | Get the network bandwidth(in bytes per second) for the given datanode. This is the maximum network bandwidth used by the datanode during HDFS block balancing.|
+ | `-fetchImage` \<local directory\> | Downloads the most recent fsimage from the NameNode and saves it in the specified local directory. |
+ | `-allowSnapshot` \<snapshotDir\> | Allowing snapshots of a directory to be created. If the operation completes successfully, the directory becomes snapshottable. See the [HDFS Snapshot Documentation](./HdfsSnapshots.html) for more information. |
+diff --git hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestBalancerBandwidth.java hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestBalancerBandwidth.java
+index 6e6bbee..9028dfe 100644
+--- hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestBalancerBandwidth.java
++++ hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestBalancerBandwidth.java
+@@ -139,6 +139,36 @@ private void runGetBalancerBandwidthCmd(DFSAdmin admin, String[] args,
+     }
+   }
+ 
++  @Test
++  public void testSetBalancerBandwidthWithBinaryPrefix() throws Exception {
++    DFSAdmin admin = new DFSAdmin(conf);
++    /* Create and start cluster */
++    MiniDFSCluster cluster =
++        new MiniDFSCluster.Builder(conf).numDataNodes(1).build();
++    try {
++      cluster.waitActive();
++
++      // new datanode's bandwidth
++      long newBandwidth = 12 * DEFAULT_BANDWIDTH; // 12M bps
++      String[] args =
++          new String[] { "-setBalancerBandwidth", String.valueOf(newBandwidth) };
++      assertEquals(0, admin.run(args));
++      // Sleep some time to ensure that new bandwidth is set to datanode
++      Thread.sleep(5000);
++      assertEquals(newBandwidth, (long) cluster.getDataNodes().get(0)
++          .getBalancerBandwidth());
++      // Test balancer bandwidth with binary prefix
++      newBandwidth = 15;
++      args = new String[] { "-setBalancerBandwidth", newBandwidth + "m" };
++      assertEquals(0, admin.run(args));
++      Thread.sleep(5000);
++      assertEquals(newBandwidth * 1024 * 1024, (long) cluster.getDataNodes()
++          .get(0).getBalancerBandwidth());
++    } finally {
++      cluster.shutdown();
++    }
++  }
++
+   public static void main(String[] args) throws Exception {
+     new TestBalancerBandwidth().testBalancerBandwidth();
+   }
