@@ -1,0 +1,286 @@
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/offlineImageViewer/FileDistributionCalculator.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/offlineImageViewer/FileDistributionCalculator.java
+index 056ad96..63a716a 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/offlineImageViewer/FileDistributionCalculator.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/offlineImageViewer/FileDistributionCalculator.java
+@@ -23,14 +23,20 @@
+ import java.io.InputStream;
+ import java.io.PrintStream;
+ import java.io.RandomAccessFile;
++import java.util.HashMap;
++import java.util.Map;
+ 
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.hdfs.protocol.proto.HdfsProtos.BlockProto;
+ import org.apache.hadoop.hdfs.server.namenode.FSImageFormatProtobuf.SectionName;
+ import org.apache.hadoop.hdfs.server.namenode.FSImageUtil;
++import org.apache.hadoop.hdfs.server.namenode.FsImageProto;
+ import org.apache.hadoop.hdfs.server.namenode.FsImageProto.FileSummary;
+ import org.apache.hadoop.hdfs.server.namenode.FsImageProto.INodeSection;
++import org.apache.hadoop.hdfs.server.namenode.FsImageProto.INodeSection.INode;
++import org.apache.hadoop.hdfs.tools.offlineImageViewer.PBImageTextWriter.InMemoryMetadataDB;
+ import org.apache.hadoop.util.LimitInputStream;
++import org.apache.hadoop.util.StringUtils;
+ 
+ import com.google.common.base.Preconditions;
+ 
+@@ -75,8 +81,15 @@
+   private long totalSpace;
+   private long maxFileSize;
+ 
++  // Whether print small file infos
++  private boolean printSmallFiles;
++  private String prefixPath;
++  private String[] prefixStrs;
++  private HashMap<String, Integer> smallFilesMap;
++  private InMemoryMetadataDB metadataMap = null;
++
+   FileDistributionCalculator(Configuration conf, long maxSize, int steps,
+-      PrintStream out) {
++      PrintStream out, boolean printSmallFiles, String prefixPath) {
+     this.conf = conf;
+     this.maxSize = maxSize == 0 ? MAX_SIZE_DEFAULT : maxSize;
+     this.steps = steps == 0 ? INTERVAL_DEFAULT : steps;
+@@ -87,6 +100,19 @@
+         "Too many distribution intervals (maxSize/step): " + numIntervals +
+         ", should be less than " + (MAX_INTERVALS+1) + ".");
+     this.distribution = new int[1 + (int) (numIntervals)];
++    this.printSmallFiles = printSmallFiles;
++    this.prefixPath = prefixPath;
++    this.smallFilesMap = new HashMap<String, Integer>();
++
++    if (this.prefixPath != null && this.prefixPath.length() > 0) {
++      out.println("PrefixPath: " + this.prefixPath);
++      this.prefixStrs = this.prefixPath.split(",");
++      out.println("prefixStrs: " + prefixStrs);
++    }
++
++    if (this.printSmallFiles) {
++      this.metadataMap = new InMemoryMetadataDB();
++    }
+   }
+ 
+   void visit(RandomAccessFile file) throws IOException {
+@@ -96,6 +122,31 @@ void visit(RandomAccessFile file) throws IOException {
+ 
+     FileSummary summary = FSImageUtil.loadSummary(file);
+     try (FileInputStream in = new FileInputStream(file.getFD())) {
++      // If we want to print small files info, we should load directory inodes
++      if (printSmallFiles) {
++        for (FileSummary.Section s : summary.getSectionsList()) {
++          if (SectionName.fromString(s.getName()) == SectionName.INODE) {
++            in.getChannel().position(s.getOffset());
++            InputStream is =
++                FSImageUtil.wrapInputStreamForCompression(conf, summary
++                    .getCodec(), new BufferedInputStream(new LimitInputStream(
++                    in, s.getLength())));
++            loadDirectoriesInINodeSection(is);
++          }
++        }
++
++        for (FileSummary.Section s : summary.getSectionsList()) {
++          if (SectionName.fromString(s.getName()) == SectionName.INODE_DIR) {
++            in.getChannel().position(s.getOffset());
++            InputStream is =
++                FSImageUtil.wrapInputStreamForCompression(conf, summary
++                    .getCodec(), new BufferedInputStream(new LimitInputStream(
++                    in, s.getLength())));
++            buildNamespace(is);
++          }
++        }
++      }
++
+       for (FileSummary.Section s : summary.getSectionsList()) {
+         if (SectionName.fromString(s.getName()) != SectionName.INODE) {
+           continue;
+@@ -111,6 +162,46 @@ void visit(RandomAccessFile file) throws IOException {
+     }
+   }
+ 
++  private void buildNamespace(InputStream in) throws IOException {
++    int count = 0;
++    while (true) {
++      FsImageProto.INodeDirectorySection.DirEntry e =
++          FsImageProto.INodeDirectorySection.DirEntry.parseDelimitedFrom(in);
++      if (e == null) {
++        out.println("FsImageProto.INodeDirectorySection.DirEntry is null.");
++        break;
++      }
++      count++;
++      if (count % 10000 == 0) {
++        out.println("Scanned {} directories: " + count);
++      }
++      long parentId = e.getParent();
++      // Referred INode is not support for now.
++      for (int i = 0; i < e.getChildrenCount(); i++) {
++        long childId = e.getChildren(i);
++        metadataMap.putDirChild(parentId, childId);
++      }
++      Preconditions.checkState(e.getRefChildrenCount() == 0);
++    }
++  }
++
++  private void loadDirectoriesInINodeSection(InputStream in) throws IOException {
++    INodeSection s = INodeSection.parseDelimitedFrom(in);
++    out.println("Loading directories in INode section.");
++    int numDirs = 0;
++    for (int i = 0; i < s.getNumInodes(); ++i) {
++      INode p = INode.parseDelimitedFrom(in);
++      if (i % 10000 == 0) {
++        out.println("Scanned {} inodes: " + i);
++      }
++      if (p.hasDirectory()) {
++        metadataMap.putDir(p);
++        numDirs++;
++      }
++    }
++    out.println("Found {} directories in INode section: " + numDirs);
++  }
++
+   private void run(InputStream in) throws IOException {
+     INodeSection s = INodeSection.parseDelimitedFrom(in);
+     for (int i = 0; i < s.getNumInodes(); ++i) {
+@@ -130,6 +221,11 @@ private void run(InputStream in) throws IOException {
+             .ceil((double)fileSize / steps);
+         ++distribution[bucket];
+ 
++        if (printSmallFiles && (bucket == 1 || bucket == 0)) {
++          increaseSmallFilesCount(prefixStrs, p.getId(), p.getName()
++              .toStringUtf8());
++        }
++
+       } else if (p.getType() == INodeSection.INode.Type.DIRECTORY) {
+         ++totalDirectories;
+       }
+@@ -145,7 +241,12 @@ private void output() {
+     out.print("Size\tNumFiles\n");
+     for (int i = 0; i < distribution.length; i++) {
+       if (distribution[i] != 0) {
+-        out.print(((long) i * steps) + "\t" + distribution[i]);
++        out.print("("
++            + StringUtils.TraditionalBinaryPrefix.long2String(
++                ((long) (i == 0 ? 0 : i - 1) * steps), "", 2)
++            + ", "
++            + StringUtils.TraditionalBinaryPrefix.long2String(
++                ((long) i * steps), "", 2) + "]\t" + distribution[i]);
+         out.print('\n');
+       }
+     }
+@@ -154,5 +255,57 @@ private void output() {
+     out.print("totalBlocks = " + totalBlocks + "\n");
+     out.print("totalSpace = " + totalSpace + "\n");
+     out.print("maxFileSize = " + maxFileSize + "\n");
++
++    if (printSmallFiles) {
++      out.print("\n\n");
++      out.print("********Small Files List(Total: " + smallFilesMap.size()
++          + ")********" + "\n");
++      // Print the smallFiles result
++      for (Map.Entry<String, Integer> entry : smallFilesMap.entrySet()) {
++        out.println("Dir: " + entry.getKey() + ", Count: " + entry.getValue());
++      }
++    }
++  }
++
++  /**
++   * Record small file's name
++   */
++  private void increaseSmallFilesCount(String[] prefixPaths, long nodeId,
++      String pathStr) {
++    int count = 0;
++    String parentPath = "";
++
++    try {
++      parentPath = metadataMap.getParentPath(nodeId);
++    } catch (Exception e) {
++      // TODO Auto-generated catch block
++      e.printStackTrace();
++    }
++
++    boolean isMatch = false;
++    if (prefixPaths == null || prefixPaths.length == 0) {
++      isMatch = true;
++    } else {
++      for (String str : prefixPaths) {
++        if (str != null && str.length() > 0 && parentPath.startsWith(str)) {
++          isMatch = true;
++          break;
++        }
++      }
++    }
++
++    // Judge if the parentPath match the target prefixPath
++    if (!isMatch) {
++      return;
++    }
++
++    if (!smallFilesMap.containsKey(parentPath)) {
++      count = 0;
++    } else {
++      count = smallFilesMap.get(parentPath);
++    }
++
++    count++;
++    smallFilesMap.put(parentPath, count);
+   }
+ }
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/offlineImageViewer/OfflineImageViewerPB.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/offlineImageViewer/OfflineImageViewerPB.java
+index c9158d9..e9c7db6 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/offlineImageViewer/OfflineImageViewerPB.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/offlineImageViewer/OfflineImageViewerPB.java
+@@ -63,6 +63,9 @@
+       + "    -maxSize specifies the range [0, maxSize] of file sizes to be\n"
+       + "     analyzed (128GB by default).\n"
+       + "    -step defines the granularity of the distribution. (2MB by default)\n"
++      + "    -printSmallFiles print detail infos of small files in the first two buckets.\n"
++      + "    -prefixPath print detail infos of small files which its path must start with prefixPath,\n"
++      + "    the prefixPath can be more than one, for example -prefixPath /path1,/path2.\n"
+       + "  * Web: Run a viewer to expose read-only WebHDFS API.\n"
+       + "    -addr specifies the address to listen. (localhost:5978 by default)\n"
+       + "  * Delimited (experimental): Generate a text file with all of the elements common\n"
+@@ -104,6 +107,8 @@ private static Options buildOptions() {
+     options.addOption("h", "help", false, "");
+     options.addOption("maxSize", true, "");
+     options.addOption("step", true, "");
++    options.addOption("prefixPath", true, "");
++    options.addOption("printSmallFiles", false, "");
+     options.addOption("addr", true, "");
+     options.addOption("delimiter", true, "");
+     options.addOption("t", "temp", true, "");
+@@ -159,12 +164,18 @@ public static int run(String[] args) throws Exception {
+     try (PrintStream out = outputFile.equals("-") ?
+         System.out : new PrintStream(outputFile, "UTF-8")) {
+       switch (processor) {
+-        case "FileDistribution":
+-          long maxSize = Long.parseLong(cmd.getOptionValue("maxSize", "0"));
+-          int step = Integer.parseInt(cmd.getOptionValue("step", "0"));
+-          new FileDistributionCalculator(conf, maxSize, step, out).visit(
+-              new RandomAccessFile(inputFile, "r"));
+-          break;
++      case "FileDistribution":
++        long maxSize = Long.parseLong(cmd.getOptionValue("maxSize", "0"));
++        int step = Integer.parseInt(cmd.getOptionValue("step", "0"));
++        String prefixPath = cmd.getOptionValue("prefixPath", "");
++        boolean printSmallFiles = cmd.hasOption("printSmallFiles");
++        out.println("MaxSize " + maxSize + ", Step: " + step
++            + ", PrintSmallFiles: " + printSmallFiles + ", PrefixPath: "
++            + prefixPath);
++        new FileDistributionCalculator(conf, maxSize, step, out,
++            printSmallFiles, prefixPath).visit(new RandomAccessFile(inputFile,
++            "r"));
++        break;
+         case "XML":
+           new PBImageXmlWriter(conf, out).visit(
+               new RandomAccessFile(inputFile, "r"));
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/offlineImageViewer/PBImageTextWriter.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/offlineImageViewer/PBImageTextWriter.java
+index d2ccc5c..4ba7125 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/offlineImageViewer/PBImageTextWriter.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/offlineImageViewer/PBImageTextWriter.java
+@@ -118,7 +118,7 @@
+   /**
+    * Maintain all the metadata in memory.
+    */
+-  private static class InMemoryMetadataDB implements MetadataMap {
++  public static class InMemoryMetadataDB implements MetadataMap {
+     /**
+      * Represent a directory in memory.
+      */
