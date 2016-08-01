@@ -219,6 +219,11 @@ final class FileDistributionCalculator {
 
         int bucket = fileSize > maxSize ? distribution.length - 1 : (int) Math
             .ceil((double)fileSize / steps);
+        if (bucket >= distribution.length) {
+          bucket = distribution.length - 1;
+          out.println("Bucket index is out of index, fileSize: " + fileSize
+              + ", step: " + steps);
+        }
         ++distribution[bucket];
 
         if (printSmallFiles && (bucket == 1 || bucket == 0)) {
